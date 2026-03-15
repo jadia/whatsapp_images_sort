@@ -213,8 +213,12 @@ def main() -> None:
         db.close()
         return
 
+    has_running_batch = False
+    if config.api_mode == "batch":
+        has_running_batch = len(db.get_running_batch_jobs()) > 0
+
     # Show brief stats before processing
-    if pending_count == 0:
+    if pending_count == 0 and not has_running_batch:
         logger.info("No pending images — all %d images already processed", completed_count)
         print(f"\n  All {completed_count:,} images already processed. Nothing to do.\n")
         db.close()
@@ -266,6 +270,7 @@ def main() -> None:
     db.record_session(
         session_id=session_id,
         mode=config.api_mode,
+        model=config.active_model,
         images_processed=processed,
         total_tokens=cost_tracker.total_tokens,
         cost_local_currency=session_cost.cost_local,

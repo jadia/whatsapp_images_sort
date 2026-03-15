@@ -251,6 +251,7 @@ class TestSessionStats:
         test_db.record_session(
             session_id="test-uuid-123",
             mode="standard",
+            model="gemini-pro-test",
             images_processed=42,
             total_tokens=5000,
             cost_local_currency=1.23,
@@ -262,6 +263,7 @@ class TestSessionStats:
         )
         row = cursor.fetchone()
         assert row["mode"] == "standard"
+        assert row["model_name"] == "gemini-pro-test"
         assert row["images_processed"] == 42
         assert row["total_tokens"] == 5000
         assert row["inserted_on"] is not None

@@ -113,7 +113,7 @@ def move_image(
             logger.debug("Moved (EXIF restored): %s → %s", src_path, dest_path)
         except Exception as exc:
             # EXIF injection failed — the original copy is still intact
-            logger.warning("EXIF restore failed for %s (kept original): %s", dest_path, exc)
+            logger.debug("EXIF restore failed for %s (kept original): %s", dest_path, exc)
     else:
         logger.debug("Moved (copy): %s → %s", src_path, dest_path)
 

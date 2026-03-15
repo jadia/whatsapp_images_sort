@@ -106,11 +106,13 @@ All tables include audit columns (`inserted_on`, `updated_on`) with `updated_on`
 This mode requires the script to operate in a "Submit, Exit, and Resume" lifecycle.
 
 - **Phase 1 (Submit):**
-  - Pull `batch_chunk_size` images. Resize them.
-  - Upload them to Google's temporary storage using the **Gemini File API** (`client.files.upload()`). Store the returned URIs.
-  - Create a `.jsonl` file mapping local file paths to File API URIs.
-  - Submit the Job to the Gemini Batch API (`client.batches.create()`).
-  - Save the `api_job_name` to the `BatchJobs` table, mark the images as `Processing` in `ImageQueue`, print a message to the user, and **EXIT the script**.
+  - Loop while there are images in the `Pending` queue:
+    - Pull up to `batch_chunk_size` images. Resize them.
+    - Upload them to Google's temporary storage using the **Gemini File API** (`client.files.upload()`). Store the returned URIs.
+    - Create a `.jsonl` file mapping local file paths to File API URIs.
+    - Submit the Job to the Gemini Batch API (`client.batches.create()`).
+    - Save the `api_job_name` to the `BatchJobs` table, mark the images as `Processing` in `ImageQueue`.
+  - Once the queue is fully submitted across multiple batch jobs, transition to Phase 2.
 
 - **Phase 2 (Resume & Poll):**
   - Upon next launch, the script checks `BatchJobs` for `Running` jobs.

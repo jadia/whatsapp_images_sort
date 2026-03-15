@@ -29,17 +29,20 @@ graph TB
 
     subgraph Batch["Batch Mode"]
         E -->|batch| O{Running Jobs?}
-        O -->|No| P[Phase 1: Submit]
+        O -->|No| P[Phase 1: Submit All Pending]
         O -->|Yes| Q[Phase 2: Resume]
 
-        P --> P1["Resize + Upload\n(ThreadPoolExecutor)"]
+        P --> P0[Loop chunks of `batch_chunk_size`]
+        P0 --> P1["Resize + Upload\n(ThreadPoolExecutor)"]
         P1 --> P3[Build JSONL]
         P3 --> P4[Submit Batch Job]
-        P4 --> P5[Save to DB & EXIT]
+        P4 --> P5[Save to DB]
+        P5 --> P0
+        P0 -->|Queue Empty| Q
 
         Q --> Q1[Poll Job Status]
         Q1 --> Q2{Status?}
-        Q2 -->|Running| Q3[Notify & EXIT]
+        Q2 -->|Running| Q3[Wait 60s & Re-poll]
         Q2 -->|Succeeded| Q4[Parse Output\nMove Files]
         Q2 -->|Failed| Q5[Revert to Pending]
         Q4 --> Q6[Cleanup File API]
@@ -100,8 +103,8 @@ sequenceDiagram
 
 Batch mode is fully asynchronous and significantly cheaper, designed for bulk processing. It operates in two lifecycle phases to allow the user to close the terminal while Google processes the data in the background.
 
-**Phase 1** resizes and uploads images in parallel using `ThreadPoolExecutor` (configurable via `upload_threads`). Each upload is wrapped in `retry_with_backoff()` to handle rate limits. If the user presses Ctrl+C, all orphaned files are cleaned up from the File API before exiting. After uploads complete, the JSONL manifest is submitted.
-**Phase 2** (triggered on a subsequent run of the script) polls the job status. When successful, it pulls the results, categorizes the files, and executes a parallel cleanup sweep of the File API to prevent exhausting the user's storage quota.
+**Phase 1** pulls chunks of images (up to `batch_chunk_size` at a time) from the pending queue and resizes/uploads them in parallel using `ThreadPoolExecutor`. Each upload is wrapped in `retry_with_backoff()` to handle rate limits. The chunk is packaged into a JSONL manifest and submitted to the Batch API. This loop repeats until the *entire* pending queue has been successfully dispatched as multiple independent jobs.
+**Phase 2** polling begins. The script checks job status. While jobs are running, it displays a live countdown. When successful, it pulls the results, categorizes the files, and executes a parallel cleanup sweep of the File API to prevent exhausting the user's storage quota. If the user presses Ctrl+C at any point, all orphaned uploads are cleaned up from the File API before exiting.
 
 ```mermaid
 sequenceDiagram
@@ -113,24 +116,26 @@ sequenceDiagram
 
     Note over User,BatchAPI: Phase 1 — Submit
     User->>Main: python main.py (batch mode)
-    Main->>DB: get_pending_batch(1000)
-    DB-->>Main: [1000 images]
+    
+    loop Until Pending Queue is Empty
+        Main->>DB: get_pending_batch(1000)
+        DB-->>Main: [1000 images]
 
-    loop ThreadPoolExecutor (upload_threads)
-        Main->>FileAPI: upload(resized_jpeg) [with retry]
-        FileAPI-->>Main: file_uri
+        loop ThreadPoolExecutor (upload_threads)
+            Main->>FileAPI: upload(resized_jpeg) [with retry]
+            FileAPI-->>Main: file_uri
+        end
+
+        Main->>Main: Build JSONL input
+        Main->>FileAPI: upload(input.jsonl)
+        Main->>BatchAPI: batches.create(src=jsonl)
+        BatchAPI-->>Main: job_name
+        Main->>DB: create_batch_job(job_name)
+        Main->>DB: mark_processing(1000 images)
+        Main->>User: "Job submitted!"
     end
 
-    Main->>Main: Build JSONL input
-    Main->>FileAPI: upload(input.jsonl)
-    Main->>BatchAPI: batches.create(src=jsonl)
-    BatchAPI-->>Main: job_name
-    Main->>DB: create_batch_job(job_name)
-    Main->>DB: mark_processing(1000 images)
-    Main->>User: "Job submitted! Run again later."
-    Note over Main: SCRIPT EXITS
-
-    Note over User,BatchAPI: Phase 2 — Resume
+    Note over User,BatchAPI: Phase 2 — Resume & Poll
     User->>Main: python main.py (next run)
     Main->>DB: get_running_batch_jobs()
     DB-->>Main: [job_name]
@@ -152,6 +157,19 @@ sequenceDiagram
         Main->>User: "Job failed, images re-queued."
     end
 ```
+
+## File Tracking & State Management
+
+A core design principle of this project is that the **source directory is treated as strictly read-only**. 
+
+When a batch completes successfully, the application does *not* actually "move" or delete the original files. Instead, `src/file_mover.py` **copies** the files to the output directory. This is why you will still see all original images in your source folder, while the destination folder only contains the processed ones. This non-destructive approach guarantees zero data loss if something goes wrong.
+
+**How does the script know what has been processed?**
+It does not rely on comparing the source and destination folders. Instead, it tracks the exact state of every single file using the SQLite Database (`state.db`).
+1. **Scanning**: On startup, `main.py` scans the source directory.
+2. **Enqueuing**: It checks the DB. If a file path isn't in the DB, it inserts it with a `Pending` status.
+3. **Processing**: When standard mode or batch mode successfully categorize an image and copy it to the destination, that specific row in the DB is updated to `Completed`.
+4. **Resuming**: The next time you run the script, `main.py` queries the database for files that are *still* `Pending`. It completely ignores files marked as `Completed`, which prevents duplicate processing and saves API costs.
 
 ## Database Schema
 
@@ -185,6 +203,7 @@ erDiagram
     SessionStats {
         text session_id PK
         text mode
+        text model_name
         int images_processed
         int total_tokens
         real cost_local_currency

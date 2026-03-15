@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS BatchJobs (
 CREATE TABLE IF NOT EXISTS SessionStats (
     session_id          TEXT    PRIMARY KEY,
     mode                TEXT    NOT NULL,
+    model_name          TEXT,
     images_processed    INTEGER NOT NULL DEFAULT 0,
     total_tokens        INTEGER NOT NULL DEFAULT 0,
     cost_local_currency REAL    NOT NULL DEFAULT 0.0,
@@ -398,6 +399,7 @@ class Database:
         self,
         session_id: str,
         mode: str,
+        model: str,
         images_processed: int,
         total_tokens: int,
         cost_local_currency: float,
@@ -408,15 +410,16 @@ class Database:
         Args:
             session_id: UUID string identifying this run.
             mode: 'standard' or 'batch'.
+            model: Name of the Gemini model used.
             images_processed: Total images successfully processed.
             total_tokens: Total API tokens consumed.
             cost_local_currency: Total cost in local currency.
         """
         self.conn.execute(
             "INSERT OR REPLACE INTO SessionStats "
-            "(session_id, mode, images_processed, total_tokens, cost_local_currency) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (session_id, mode, images_processed, total_tokens, cost_local_currency),
+            "(session_id, mode, model_name, images_processed, total_tokens, cost_local_currency) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, mode, model, images_processed, total_tokens, cost_local_currency),
         )
         self.conn.commit()
         logger.info(

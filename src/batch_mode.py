@@ -27,9 +27,11 @@ Crucial Cleanup:
 import json
 import logging
 import os
+import sys
 import tempfile
 import threading
 import time
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
 
@@ -76,37 +78,45 @@ def run_batch_mode(
     if not dry_run:
         client = genai.Client(api_key=config.gemini_api_key)
 
-    # ── Check for existing batch jobs → Phase 2 (Resume) ─────
+    # ── Phase 1 (Submit) ─────────────────────────────────────────
+    # We always attempt to submit any pending images into the batch queue first.
+    # The `_submit_batch_job` function will pull `config.batch_chunk_size` images at a time.
+    while True:
+        submitted = _submit_batch_job(
+            client=client,
+            config=config,
+            db=db,
+            test_mode=test_mode,
+            dry_run=dry_run,
+        )
+        if not submitted:
+            break
+
+    # ── Phase 2 (Resume) ─────────────────────────────────────────
     running_jobs = db.get_running_batch_jobs()
 
     if running_jobs:
         logger.info(
-            "Found %d running/pending batch job(s) — resuming",
+            "Found %d running/pending batch job(s) — returning to polling phase",
             len(running_jobs),
         )
+    else:
+        logger.info("No running batch jobs to poll.")
+        return 0
 
-        total_processed = 0
-        for job in running_jobs:
-            processed = _resume_batch_job(
-                client=client,
-                config=config,
-                db=db,
-                cost_tracker=cost_tracker,
-                job=job,
-                dry_run=dry_run,
-            )
-            total_processed += processed
+    total_processed = 0
+    for job in running_jobs:
+        processed = _resume_batch_job(
+            client=client,
+            config=config,
+            db=db,
+            cost_tracker=cost_tracker,
+            job=job,
+            dry_run=dry_run,
+        )
+        total_processed += processed
 
-        return total_processed
-
-    # ── No running jobs → Phase 1 (Submit) ───────────────────
-    return _submit_batch_job(
-        client=client,
-        config=config,
-        db=db,
-        test_mode=test_mode,
-        dry_run=dry_run,
-    )
+    return total_processed
 
 
 # ── Helper: Single image upload (thread-safe) ───────────────
@@ -179,7 +189,7 @@ def _submit_batch_job(
     db: Database,
     test_mode: bool,
     dry_run: bool,
-) -> int:
+) -> bool:
     """
     Phase 1: Submit a new batch job.
 
@@ -187,7 +197,7 @@ def _submit_batch_job(
     creates JSONL, submits batch, and EXITS.
 
     Returns:
-        0 always (no images processed yet — they're queued).
+        True if a batch was successfully submitted, False otherwise.
     """
     # Determine batch size
     batch_limit = config.standard_club_size if test_mode else config.batch_chunk_size
@@ -195,7 +205,7 @@ def _submit_batch_job(
 
     if not pending:
         logger.info("No Pending images for batch submission")
-        return 0
+        return False
 
     logger.info(
         "Phase 1 (Submit): Preparing %d images for batch upload (%d threads)",
@@ -207,7 +217,7 @@ def _submit_batch_job(
             "[DRY RUN] Would upload %d images and submit batch job — skipping",
             len(pending),
         )
-        return 0
+        return False
 
     # Initialize tracking variables for cleanup
     uploaded_files: List[Dict] = []
@@ -253,7 +263,7 @@ def _submit_batch_job(
 
         if not uploaded_files:
             logger.error("No images could be uploaded — aborting batch submission")
-            return 0
+            return False
 
         logger.info("Uploaded %d images to File API", len(uploaded_files))
 
@@ -343,10 +353,14 @@ def _submit_batch_job(
             image_ids = [item["db_row"]["id"] for item in uploaded_files]
             db.revert_to_pending(image_ids)
             # Attempt to clean up File API uploads
-            _cleanup_file_api(client, [item["file_api_name"] for item in uploaded_files])
+            _cleanup_file_api(
+                client, 
+                [item["file_api_name"] for item in uploaded_files], 
+                max_workers=config.upload_threads
+            )
             if os.path.exists(jsonl_path):
                 os.unlink(jsonl_path)
-            return 0
+            return False
 
         # ── Step 4: Record in DB and EXIT ────────────────────────
         job_id = db.create_batch_job(api_job_name)
@@ -363,13 +377,11 @@ def _submit_batch_job(
             "║  Batch job submitted successfully!               ║\n"
             "║  Job: %-42s ║\n"
             "║  Images: %-39d ║\n"
-            "║                                                  ║\n"
-            "║  Run this script again to check job status.      ║\n"
             "╚══════════════════════════════════════════════════╝",
             api_job_name, len(uploaded_files),
         )
 
-        return 0  # No images processed yet — they're in the queue
+        return True  # Submitted successfully
 
     except KeyboardInterrupt:
         logger.warning(
@@ -382,7 +394,7 @@ def _submit_batch_job(
             file_names_to_delete.append(jsonl_file.name)
 
         if file_names_to_delete:
-            _cleanup_file_api(client, file_names_to_delete)
+            _cleanup_file_api(client, file_names_to_delete, max_workers=config.upload_threads)
 
         # Re-raise so main.py can catch it and print the session summary
         raise
@@ -393,7 +405,7 @@ def _submit_batch_job(
         if jsonl_file:
             file_names_to_delete.append(jsonl_file.name)
         if file_names_to_delete:
-            _cleanup_file_api(client, file_names_to_delete)
+            _cleanup_file_api(client, file_names_to_delete, max_workers=config.upload_threads)
         raise
 
 
@@ -424,24 +436,43 @@ def _resume_batch_job(
 
     # ── Poll the Gemini API ──────────────────────────────────
     try:
-        batch_job = client.batches.get(name=api_job_name)
-        job_state = batch_job.state.name if hasattr(batch_job.state, "name") else str(batch_job.state)
-        logger.info("Batch job %s state: %s", api_job_name, job_state)
+        while True:
+            batch_job = client.batches.get(name=api_job_name)
+            job_state = batch_job.state.name if hasattr(batch_job.state, "name") else str(batch_job.state)
+            
+            if job_state in ("JOB_STATE_RUNNING", "JOB_STATE_PENDING", "RUNNING", "PENDING"):
+                now_str = datetime.now().strftime("%I:%M:%S %p")
+                
+                # Countdown for 60 seconds
+                for remaining in range(60, 0, -1):
+                    sys.stdout.write(f"\rBatch job {job_state}. Last polled at {now_str}. Next poll in {remaining}s... (Press Ctrl+C to exit)")
+                    sys.stdout.flush()
+                    try:
+                        time.sleep(1)
+                    except KeyboardInterrupt:
+                        # Clear the line before printing the log
+                        sys.stdout.write("\r" + " " * 100 + "\r")
+                        sys.stdout.flush()
+                        logger.warning("Polling interrupted by user (Ctrl+C). Script will exit, but Google is still processing your job.")
+                        raise
+                
+                # Clear line after countdown finishes, before polling again
+                sys.stdout.write("\r" + " " * 100 + "\r")
+                sys.stdout.flush()
+                continue
+            
+            break # Exit the polling loop if not pending/running
+
     except Exception as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
         logger.error("Failed to poll batch job %s: %s", api_job_name, exc)
         return 0
 
-    # ── Handle different states ──────────────────────────────
-    if job_state in ("JOB_STATE_RUNNING", "JOB_STATE_PENDING", "RUNNING", "PENDING"):
-        logger.info(
-            "╔══════════════════════════════════════════════════╗\n"
-            "║  Batch job is still running.                     ║\n"
-            "║  Job: %-42s ║\n"
-            "║  Run this script again later to check status.    ║\n"
-            "╚══════════════════════════════════════════════════╝",
-            api_job_name,
-        )
-        return 0
+    # Ensure the line is cleared if it broke out of the loop successfully
+    sys.stdout.write("\r" + " " * 100 + "\r")
+    sys.stdout.flush()
+    logger.info("Batch job %s finished with state: %s", api_job_name, job_state)
 
     if job_state in ("JOB_STATE_SUCCEEDED", "SUCCEEDED"):
         return _handle_batch_success(
@@ -459,6 +490,7 @@ def _resume_batch_job(
             db=db,
             job_id=job_id,
             api_job_name=api_job_name,
+            max_workers=config.upload_threads,
         )
 
     # Unknown state
@@ -583,7 +615,7 @@ def _handle_batch_success(
     metadata = _load_batch_metadata(job_id)
     if metadata:
         file_names = [item["file_api_name"] for item in metadata]
-        _cleanup_file_api(client, file_names)
+        _cleanup_file_api(client, file_names, max_workers=config.upload_threads)
 
     logger.info(
         "Batch job complete: %d/%d processed, %d mismatched",
@@ -597,6 +629,7 @@ def _handle_batch_failure(
     db: Database,
     job_id: int,
     api_job_name: str,
+    max_workers: int = 10,
 ) -> int:
     """
     Handle a failed batch job.
@@ -622,7 +655,7 @@ def _handle_batch_failure(
     metadata = _load_batch_metadata(job_id)
     if metadata:
         file_names = [item["file_api_name"] for item in metadata]
-        _cleanup_file_api(client, file_names)
+        _cleanup_file_api(client, file_names, max_workers=max_workers)
 
     return 0
 
@@ -632,6 +665,7 @@ def _handle_batch_failure(
 def _cleanup_file_api(
     client: Optional[genai.Client],
     file_names: List[str],
+    max_workers: int = 15,
 ) -> None:
     """
     Delete temporary files from the Gemini File API in parallel.
@@ -642,11 +676,12 @@ def _cleanup_file_api(
     Args:
         client: Gemini API client.
         file_names: List of File API resource names to delete.
+        max_workers: Number of threads to use for parallel deletions.
     """
     if not client or not file_names:
         return
 
-    logger.info("Cleaning up %d File API uploads...", len(file_names))
+    logger.info("Cleaning up %d File API uploads (showing progress below)...", len(file_names))
     deleted = 0
     lock = threading.Lock()
 
@@ -662,13 +697,16 @@ def _cleanup_file_api(
             logger.warning("Failed to delete %s: %s", name, exc)
             return False
 
-    max_workers = min(10, len(file_names))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    actual_workers = min(max_workers, len(file_names))
+    with ThreadPoolExecutor(max_workers=actual_workers) as executor:
         futures = {executor.submit(_delete_one, name): name for name in file_names}
-        for future in as_completed(futures):
-            if future.result():
-                with lock:
-                    deleted += 1
+        
+        with tqdm(total=len(file_names), desc="Cleaning up API files", unit="file", dynamic_ncols=True) as pbar:
+            for future in as_completed(futures):
+                if future.result():
+                    with lock:
+                        deleted += 1
+                pbar.update(1)
 
     logger.info("File API cleanup: %d/%d deleted", deleted, len(file_names))
 

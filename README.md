@@ -123,8 +123,8 @@ Sorted/
 
 ### Batch Mode
 - Cost-efficient (50% cheaper) but asynchronous.
-- **Phase 1:** Upload images in parallel (using `upload_threads` threads), submit batch job, then **exit**.
-- **Phase 2:** Run the script again to poll results. If done, files are moved.
+- **Phase 1:** Pulls max `batch_chunk_size` images and uploads them in parallel (using `upload_threads`). This process loops automatically to submit *all* pending images as multiple independent batch jobs sequentially.
+- **Phase 2:** After submission (or if jobs are already running), automatically begins polling the Gemini API with a live, single-line countdown. When jobs succeed, files are moved.
 - All API calls have automatic retry with exponential back-off for rate limiting.
 - Pressing Ctrl+C during upload will clean up orphaned files from the Gemini File API.
 - Automatic cleanup of temporary File API uploads.
