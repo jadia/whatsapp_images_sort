@@ -198,6 +198,9 @@ def main() -> None:
     completed_count = queue_stats.get("Completed", 0)
 
     cost_tracker = CostTracker(config)
+    # Calibrate tracker with actual historical usage from DB
+    estimation_stats = db.get_estimation_stats()
+    cost_tracker.calibrate_from_db(estimation_stats)
 
     if args.dry_run:
         _print_dry_run_summary(
@@ -225,7 +228,8 @@ def main() -> None:
     # ── Step 6: Route to the appropriate mode ────────────────
     session_id = str(uuid.uuid4())
     logger.info("Session %s starting — mode=%s", session_id, config.api_mode)
-
+    
+    processed = 0
     try:
         if config.api_mode == "standard":
             from src.standard_mode import run_standard_mode
@@ -253,10 +257,9 @@ def main() -> None:
 
     except KeyboardInterrupt:
         logger.warning("Processing interrupted by user (Ctrl+C)")
-        processed = 0
+        # Do not reset processed: we want to record the images that WERE processed
     except Exception as exc:
         logger.error("Unhandled error during processing: %s", exc, exc_info=True)
-        processed = 0
 
     # ── Step 7: Record session and print summary ─────────────
     session_cost = cost_tracker.get_session_total()
@@ -267,6 +270,10 @@ def main() -> None:
         total_tokens=cost_tracker.total_tokens,
         cost_local_currency=session_cost.cost_local,
     )
+
+    # Update global estimation stats with this session's actuals
+    actuals = cost_tracker.get_estimation_actuals()
+    db.update_estimation_stats(*actuals)
 
     # Final summary
     print("\n═══ SESSION SUMMARY ═══════════════════════════════")

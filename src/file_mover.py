@@ -4,7 +4,7 @@ file_mover.py — Deterministic File Move Logic
 ============================================================
 Moves processed images to their sorted destination:
 
-    output_dir/Category/YYYY-MM-DD/filename.ext
+    output_dir/Category/YYYY/filename.ext
 
 If no date was discovered:
 
@@ -12,8 +12,7 @@ If no date was discovered:
 
 Creates intermediate directories as needed. Optionally
 writes EXIF-restored bytes instead of copying the original.
-============================================================
-"""
+============================================================"""
 
 import logging
 import os
@@ -21,7 +20,7 @@ import shutil
 from datetime import datetime
 from typing import Optional
 
-from src.image_utils import restore_exif_date, save_image_without_exif
+from src.image_utils import restore_exif_date
 
 logger = logging.getLogger("whatsapp_sorter")
 
@@ -39,7 +38,7 @@ def build_destination_path(
     Build the full destination path for a sorted image.
 
     Path structure:
-        output_dir/Category/YYYY-MM-DD/filename.ext
+        output_dir/Category/YYYY/filename.ext
         output_dir/Category/Unknown_Date/filename.ext
 
     Args:
@@ -51,9 +50,9 @@ def build_destination_path(
     Returns:
         Absolute path to the destination file.
     """
-    # Build the date folder name
+    # Build the date folder name (year only)
     if date is not None:
-        date_folder = date.strftime("%Y-%m-%d")
+        date_folder = date.strftime("%Y")
     else:
         date_folder = UNKNOWN_DATE_FOLDER
 
@@ -70,14 +69,13 @@ def move_image(
     date: Optional[datetime],
     output_dir: str,
     exif_restore: bool = False,
-    resized_bytes: Optional[bytes] = None,
 ) -> str:
     """
     Move an image to its sorted destination folder.
 
-    If exif_restore is True and we have both resized_bytes and
-    a date, the image is saved with EXIF DateTimeOriginal set.
-    Otherwise, the original file is copied to the destination.
+    Always copies the ORIGINAL full-resolution file to the
+    destination. If exif_restore is True and a date is available,
+    EXIF DateTimeOriginal is injected into the copied file.
 
     Args:
         src_path: Absolute path to the original source image.
@@ -85,8 +83,6 @@ def move_image(
         date: Extracted date (or None → Unknown_Date).
         output_dir: Root output directory from config.
         exif_restore: Whether to inject EXIF date metadata.
-        resized_bytes: Optional resized JPEG bytes (used when
-            exif_restore is True).
 
     Returns:
         Absolute path to the destination file.
@@ -105,15 +101,21 @@ def move_image(
     dest_dir = os.path.dirname(dest_path)
     os.makedirs(dest_dir, exist_ok=True)
 
-    # Write the file
-    if exif_restore and resized_bytes is not None and date is not None:
-        # Save with EXIF date restored
-        restore_exif_date(resized_bytes, date, dest_path)
-        logger.info("Moved (EXIF restored): %s → %s", src_path, dest_path)
+    # Always copy the ORIGINAL file first
+    shutil.copy2(src_path, dest_path)
+
+    # Optionally inject EXIF date into the copied file
+    if exif_restore and date is not None:
+        try:
+            with open(dest_path, "rb") as fh:
+                original_bytes = fh.read()
+            restore_exif_date(original_bytes, date, dest_path)
+            logger.debug("Moved (EXIF restored): %s → %s", src_path, dest_path)
+        except Exception as exc:
+            # EXIF injection failed — the original copy is still intact
+            logger.warning("EXIF restore failed for %s (kept original): %s", dest_path, exc)
     else:
-        # Copy original file as-is
-        shutil.copy2(src_path, dest_path)
-        logger.info("Moved (copy): %s → %s", src_path, dest_path)
+        logger.debug("Moved (copy): %s → %s", src_path, dest_path)
 
     return dest_path
 

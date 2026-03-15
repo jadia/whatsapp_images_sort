@@ -2,6 +2,8 @@
 .env
 *.key
 test_data/
+test_data_sorted/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -76,6 +76,21 @@ CREATE TABLE IF NOT EXISTS SessionStats (
 );
 
 -- ============================================================
+-- EstimationStats: cumulative token averages for cost estimates
+-- Self-calibrating: updated after each session with actuals.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS EstimationStats (
+    id                    INTEGER PRIMARY KEY CHECK (id = 1),
+    total_images_measured  INTEGER NOT NULL DEFAULT 0,
+    total_input_tokens     INTEGER NOT NULL DEFAULT 0,
+    total_output_tokens    INTEGER NOT NULL DEFAULT 0,
+    updated_on             TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+-- Seed the single row if it doesn't exist
+INSERT OR IGNORE INTO EstimationStats (id) VALUES (1);
+
+-- ============================================================
 -- Auto-update triggers for updated_on columns
 -- ============================================================
 CREATE TRIGGER IF NOT EXISTS trg_image_queue_updated_on
@@ -406,6 +421,55 @@ class Database:
         logger.info(
             "Session recorded: %s — %d images, %d tokens, cost=%.4f",
             session_id, images_processed, total_tokens, cost_local_currency,
+        )
+
+    # ── EstimationStats Operations ────────────────────────────
+
+    def get_estimation_stats(self) -> Optional[Dict]:
+        """
+        Get the cumulative estimation stats.
+
+        Returns:
+            Dict with total_images_measured, total_input_tokens,
+            total_output_tokens, or None if no data yet.
+        """
+        cursor = self.conn.execute(
+            "SELECT total_images_measured, total_input_tokens, total_output_tokens "
+            "FROM EstimationStats WHERE id = 1"
+        )
+        row = cursor.fetchone()
+        if row and row["total_images_measured"] > 0:
+            return dict(row)
+        return None
+
+    def update_estimation_stats(
+        self,
+        images_in_session: int,
+        input_tokens_in_session: int,
+        output_tokens_in_session: int,
+    ) -> None:
+        """
+        Add this session's actuals to the cumulative estimation stats.
+
+        Args:
+            images_in_session: Number of images processed this session.
+            input_tokens_in_session: Total input tokens this session.
+            output_tokens_in_session: Total output tokens this session.
+        """
+        if images_in_session <= 0:
+            return
+        self.conn.execute(
+            "UPDATE EstimationStats SET "
+            "total_images_measured = total_images_measured + ?, "
+            "total_input_tokens = total_input_tokens + ?, "
+            "total_output_tokens = total_output_tokens + ? "
+            "WHERE id = 1",
+            (images_in_session, input_tokens_in_session, output_tokens_in_session),
+        )
+        self.conn.commit()
+        logger.debug(
+            "Updated estimation stats: +%d images, +%d in_tokens, +%d out_tokens",
+            images_in_session, input_tokens_in_session, output_tokens_in_session,
         )
 
     # ── Lifecycle ────────────────────────────────────────────

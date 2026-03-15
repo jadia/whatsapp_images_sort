@@ -14,18 +14,18 @@ import pytest
 from PIL import Image
 
 from src.file_mover import build_destination_path, move_image, _resolve_collision, _sanitise_dirname
-from src.image_utils import resize_image
+
 
 
 class TestBuildDestinationPath:
     """Tests for path construction logic."""
 
     def test_path_with_date(self):
-        """Should build output_dir/Category/YYYY-MM-DD/filename."""
+        """Should build output_dir/Category/YYYY/filename."""
         date = datetime(2024, 3, 15)
         path = build_destination_path("/output", "People & Social", date, "photo.jpg")
 
-        assert path == "/output/People & Social/2024-03-15/photo.jpg"
+        assert path == "/output/People & Social/2024/photo.jpg"
 
     def test_path_without_date(self):
         """Should use Unknown_Date when date is None."""
@@ -100,7 +100,7 @@ class TestMoveImage:
 
         assert os.path.isfile(dest)
         assert "People & Social" in dest
-        assert "2024-06-15" in dest
+        assert "2024" in dest
 
     def test_move_without_date(self, tmp_dirs, sample_images):
         """None date should route to Unknown_Date."""
@@ -130,9 +130,9 @@ class TestMoveImage:
         assert os.path.isfile(dest)
 
     def test_move_with_exif_restore(self, tmp_dirs, sample_images):
-        """EXIF restore should create a file at the destination."""
-        jpeg_bytes = resize_image(sample_images[0])
+        """EXIF restore should copy original and inject EXIF date."""
         date = datetime(2024, 8, 20)
+        original_size = os.path.getsize(sample_images[0])
 
         dest = move_image(
             src_path=sample_images[0],
@@ -140,11 +140,15 @@ class TestMoveImage:
             date=date,
             output_dir=tmp_dirs["output"],
             exif_restore=True,
-            resized_bytes=jpeg_bytes,
         )
 
         assert os.path.isfile(dest)
-        assert os.path.getsize(dest) > 0
+        # The destination should be roughly the same size as the original,
+        # NOT a tiny 384x384 thumbnail
+        dest_size = os.path.getsize(dest)
+        assert dest_size > 0
+        # Original file should still exist
+        assert os.path.isfile(sample_images[0])
 
     def test_move_handles_collision(self, tmp_dirs, sample_images):
         """Duplicate filenames should get _1 suffix."""

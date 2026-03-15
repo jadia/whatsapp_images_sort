@@ -15,18 +15,21 @@ Provides:
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 from src.config_manager import AppConfig, ModelPricing
 
 logger = logging.getLogger("whatsapp_sorter")
 
 # ── Average token estimates per image ────────────────────────
-# These are rough estimates based on 384×384 JPEG images.
-# Gemini typically uses ~258 tokens for a 384×384 image.
-# Text prompt overhead is ~100-150 tokens per request.
-AVG_INPUT_TOKENS_PER_IMAGE = 300   # image tokens + prompt share
-AVG_OUTPUT_TOKENS_PER_IMAGE = 30   # JSON response per image
+# Calibrated from a real 10-image batch with gemini-3-flash-preview:
+#   Observed: 11,186 input tokens / 10 images = ~1,119 input/image
+#             269 output tokens   / 10 images = ~27   output/image
+# Vision tokens for a 384×384 JPEG dominate the input side at
+# roughly 1,000–1,100 tokens depending on image complexity.
+# The text prompt adds ~50–150 tokens shared across all images.
+AVG_INPUT_TOKENS_PER_IMAGE = 1_120  # vision tokens + prompt share
+AVG_OUTPUT_TOKENS_PER_IMAGE = 30    # JSON response per image
 
 
 @dataclass
@@ -55,6 +58,10 @@ class CostTracker:
 
     Accumulates token counts across multiple API calls and
     computes costs using the pricing configuration.
+
+    Supports self-calibrating estimates: if historical data
+    is available in the database, per-image token averages
+    are computed from actual past usage rather than hardcoded.
     """
 
     def __init__(self, config: AppConfig):
@@ -68,9 +75,42 @@ class CostTracker:
         self.exchange_rate: float = config.currency.usd_exchange_rate
         self.currency_symbol: str = config.currency.symbol
 
+        # Per-image token estimates (defaults, overridden by calibrate_from_db)
+        self._avg_input = AVG_INPUT_TOKENS_PER_IMAGE
+        self._avg_output = AVG_OUTPUT_TOKENS_PER_IMAGE
+        self._calibrated = False
+
         # Accumulators for the session
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
+        self._images_processed: int = 0
+
+    def calibrate_from_db(self, estimation_stats: dict | None) -> None:
+        """
+        Override per-image token estimates with historical actuals.
+
+        Called once at script start with data from EstimationStats.
+
+        Args:
+            estimation_stats: Dict from db.get_estimation_stats(), or
+                None if no history exists (uses defaults).
+        """
+        if estimation_stats is None:
+            logger.debug("No historical estimation data — using defaults")
+            return
+
+        total_images = estimation_stats["total_images_measured"]
+        if total_images <= 0:
+            return
+
+        self._avg_input = estimation_stats["total_input_tokens"] // total_images
+        self._avg_output = estimation_stats["total_output_tokens"] // total_images
+        self._calibrated = True
+        logger.info(
+            "Cost estimates calibrated from %d historical images: "
+            "avg_in=%d, avg_out=%d tokens/image",
+            total_images, self._avg_input, self._avg_output,
+        )
 
     def estimate_cost(self, num_images: int) -> CostResult:
         """
@@ -84,16 +124,18 @@ class CostTracker:
             num_images: Number of images to process.
 
         Returns:
-            CostResult with estimated values.
+            CostResult with estimated values based on either historical
+            actuals (if calibrated) or fallback defaults.
         """
-        est_input = num_images * AVG_INPUT_TOKENS_PER_IMAGE
-        est_output = num_images * AVG_OUTPUT_TOKENS_PER_IMAGE
+        est_input = num_images * self._avg_input
+        est_output = num_images * self._avg_output
         return self._compute(est_input, est_output)
 
     def record_usage(
         self,
         input_tokens: int,
         output_tokens: int,
+        images_in_request: int = 1,
     ) -> CostResult:
         """
         Record actual token usage from an API response.
@@ -104,12 +146,14 @@ class CostTracker:
         Args:
             input_tokens: Tokens consumed for input.
             output_tokens: Tokens consumed for output.
+            images_in_request: Number of images processed in this call.
 
         Returns:
             CostResult for this API call.
         """
         self._total_input_tokens += input_tokens
         self._total_output_tokens += output_tokens
+        self._images_processed += images_in_request
 
         result = self._compute(input_tokens, output_tokens)
         logger.debug("API call cost: %s", result.format_display())
@@ -122,6 +166,20 @@ class CostTracker:
         Returns:
             CostResult with session totals.
         """
+        return self._compute(self._total_input_tokens, self._total_output_tokens)
+
+    def get_estimation_actuals(self) -> Tuple[int, int, int]:
+        """
+        Get the session's actual numbers for updating estimation averages.
+
+        Returns:
+            (images_processed, total_input_tokens, total_output_tokens)
+        """
+        return (
+            self._images_processed,
+            self._total_input_tokens,
+            self._total_output_tokens,
+        )
         return self._compute(self._total_input_tokens, self._total_output_tokens)
 
     @property

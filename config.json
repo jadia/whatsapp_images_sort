@@ -1,6 +1,6 @@
 {
   "api_mode": "standard",
-  "active_model": "gemini-3-flash-lite",
+  "active_model": "gemini-3-flash-preview",
   "batch_chunk_size": 1000,
   "standard_club_size": 10,
   "source_dir": "/path/to/WhatsApp/Media",
@@ -9,13 +9,13 @@
     "restore_exif_date": true
   },
   "pricing": {
-    "gemini-3-flash-lite": {
-      "input_per_1m": 0.075,
-      "output_per_1m": 0.30
+    "gemini-3.1-flash-lite-preview": {
+      "input_per_1m": 0.25,
+      "output_per_1m": 1.50
     },
-    "gemini-3-flash": {
-      "input_per_1m": 0.35,
-      "output_per_1m": 1.05
+    "gemini-3-flash-preview": {
+      "input_per_1m": 0.50,
+      "output_per_1m": 3.00
     }
   },
   "currency": {
@@ -23,10 +23,15 @@
     "usd_exchange_rate": 83.50
   },
   "whatsapp_categories": [
+    "Memes & Humor",
+    "People & Selfies",
+    "Food & Drinks",
     "Documents & IDs",
-    "Financial & Receipts",
-    "People & Social",
-    "Memes & Junk",
-    "Scenery & Objects"
+    "Invoices & Receipts",
+    "Screenshots & UI",
+    "News & Forwards",
+    "Travel & Landscapes",
+    "Events & Occasions",
+    "Stickers & GIFs"
   ]
 }

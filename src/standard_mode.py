@@ -103,186 +103,202 @@ def run_standard_mode(
         client = genai.Client(api_key=config.gemini_api_key)
         logger.debug("Gemini client initialised for model: %s", config.active_model)
 
+    # ── Calculate total batches ──────────────────────────────
+    total_pending = db.get_total_count()
+    # We only care about pending here for the progress indicator
+    queue_stats = db.get_queue_stats()
+    pending = queue_stats.get(STATUS_PENDING, 0)
+    club_size = config.standard_club_size
+    # Ceiling division for total batches
+    total_batches = (pending + club_size - 1) // club_size if pending > 0 else 0
+
     # ── Main processing loop ─────────────────────────────────
-    while True:
-        # Fetch next batch of Pending images
-        pending = db.get_pending_batch(config.standard_club_size)
-        if not pending:
-            logger.info("No more Pending images — Standard mode complete")
-            break
+    try:
+        while True:
+            # Fetch next batch of Pending images
+            pending_batch = db.get_pending_batch(club_size)
+            if not pending_batch:
+                logger.info("No more Pending images — Standard mode complete")
+                break
 
-        batch_number += 1
-        batch_size = len(pending)
-        logger.info(
-            "━━━ Batch %d: %d image(s) ━━━",
-            batch_number, batch_size,
-        )
-
-        if dry_run:
+            batch_number += 1
+            batch_size = len(pending_batch)
+            progress_str = f"{batch_number}/{total_batches}" if total_batches > 0 else f"{batch_number}"
+            
             logger.info(
-                "[DRY RUN] Would process %d images — skipping API call",
-                batch_size,
-            )
-            break
-
-        # ── Step 1: Resize images and prepare labels ─────────
-        images_data: List[Tuple[str, bytes]] = []  # (label, jpeg_bytes)
-        image_map: Dict[str, Dict] = {}  # label → db row + metadata
-
-        for i, row in enumerate(pending, start=1):
-            label = f"Image_{i}"
-            file_path = row["file_path"]
-
-            try:
-                jpeg_bytes = resize_image(file_path)
-                date = extract_date(file_path)
-
-                images_data.append((label, jpeg_bytes))
-                image_map[label] = {
-                    "db_row": row,
-                    "date": date,
-                    "jpeg_bytes": jpeg_bytes,
-                }
-                logger.debug("Prepared %s: %s", label, file_path)
-
-            except Exception as exc:
-                logger.error("Failed to prepare image %s: %s", file_path, exc)
-                db.mark_failed(row["id"])
-
-        if not images_data:
-            logger.warning("No images could be prepared in this batch — skipping")
-            continue
-
-        # ── Step 2: Build prompt and content parts ───────────
-        actual_count = len(images_data)
-        prompt = build_standard_prompt(actual_count, config.whatsapp_categories)
-        content_parts = _build_content_parts(prompt, images_data)
-
-        # ── Step 3: Call the Gemini API ──────────────────────
-        try:
-            logger.debug("Sending %d images to Gemini API...", actual_count)
-
-            response = client.models.generate_content(
-                model=config.active_model,
-                contents=types.Content(
-                    role="user",
-                    parts=content_parts,
-                ),
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.1,
-                ),
+                "━━━ Batch %s: %d image(s) ━━━",
+                progress_str, batch_size,
             )
 
-            logger.debug("API response received")
-
-        except Exception as exc:
-            logger.error(
-                "API call failed for batch %d: %s", batch_number, exc,
-                exc_info=True,
-            )
-            # Revert all images in batch to Pending for retry
-            failed_ids = [image_map[lbl]["db_row"]["id"] for lbl in image_map]
-            db.revert_to_pending(failed_ids)
-
-            if test_mode:
-                logger.info("--test-mode: stopping after 1 batch (API error)")
+            if dry_run:
+                logger.info(
+                    "[DRY RUN] Would process %d images — skipping API call",
+                    batch_size,
+                )
                 break
-            continue
 
-        # ── Step 4: Record token usage ───────────────────────
-        if hasattr(response, "usage_metadata") and response.usage_metadata:
-            usage = response.usage_metadata
-            cost_result = cost_tracker.record_usage(
-                input_tokens=getattr(usage, "prompt_token_count", 0) or 0,
-                output_tokens=getattr(usage, "candidates_token_count", 0) or 0,
-            )
-            logger.info("Batch %d cost: %s", batch_number, cost_result.format_display())
+            # ── Step 1: Resize images and prepare labels ─────────
+            images_data: List[Tuple[str, bytes]] = []  # (label, jpeg_bytes)
+            image_map: Dict[str, Dict] = {}  # label → db row + metadata
 
-        # ── Step 5: Parse JSON response ──────────────────────
-        try:
-            response_text = response.text
-            results = json.loads(response_text)
-            if not isinstance(results, list):
-                raise ValueError(f"Expected JSON array, got: {type(results)}")
-            logger.debug("Parsed %d results from API response", len(results))
+            for i, row in enumerate(pending_batch, start=1):
+                label = f"Image_{i}"
+                file_path = row["file_path"]
 
-        except (json.JSONDecodeError, ValueError, AttributeError) as exc:
-            logger.error(
-                "Failed to parse API response for batch %d: %s\nRaw: %s",
-                batch_number, exc,
-                getattr(response, "text", "<no text>"),
-            )
-            failed_ids = [image_map[lbl]["db_row"]["id"] for lbl in image_map]
-            db.revert_to_pending(failed_ids)
+                try:
+                    jpeg_bytes = resize_image(file_path)
+                    date = extract_date(file_path)
 
-            if test_mode:
-                logger.info("--test-mode: stopping after 1 batch (parse error)")
-                break
-            continue
+                    images_data.append((label, jpeg_bytes))
+                    image_map[label] = {
+                        "db_row": row,
+                        "date": date,
+                        "jpeg_bytes": jpeg_bytes,
+                    }
+                    logger.debug("Prepared %s: %s", label, file_path)
 
-        # ── Step 6: Match results to images ──────────────────
-        matched_labels = set()
-        batch_processed = 0
+                except Exception as exc:
+                    logger.error("Failed to prepare image %s: %s", file_path, exc)
+                    db.mark_failed(row["id"])
 
-        for result_obj in results:
-            label = result_obj.get("image", "")
-            category = result_obj.get("category", "Uncategorized_Review")
-
-            if label not in image_map:
-                logger.warning("Unknown label in response: '%s' — skipping", label)
+            if not images_data:
+                logger.warning("No images could be prepared in this batch — skipping")
                 continue
 
-            matched_labels.add(label)
-            img_info = image_map[label]
-            row = img_info["db_row"]
-            date = img_info["date"]
-            jpeg_bytes = img_info["jpeg_bytes"]
+            # ── Step 2: Build prompt and content parts ───────────
+            actual_count = len(images_data)
+            prompt = build_standard_prompt(actual_count, config.whatsapp_categories)
+            content_parts = _build_content_parts(prompt, images_data)
 
-            # ── Move the file ────────────────────────────────
+            # ── Step 3: Call the Gemini API ──────────────────────
             try:
-                move_image(
-                    src_path=row["file_path"],
-                    category=category,
-                    date=date,
-                    output_dir=config.output_dir,
-                    exif_restore=config.features.restore_exif_date,
-                    resized_bytes=jpeg_bytes,
+                logger.info("Sending %d image(s) to Gemini API (waiting for response)...", actual_count)
+
+                response = client.models.generate_content(
+                    model=config.active_model,
+                    contents=types.Content(
+                        role="user",
+                        parts=content_parts,
+                    ),
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.1,
+                    ),
                 )
-                db.mark_completed(row["id"], category)
-                batch_processed += 1
+
+                logger.info("API response received for Batch %s", progress_str)
 
             except Exception as exc:
                 logger.error(
-                    "Failed to move image %s (%s): %s",
-                    label, row["file_path"], exc,
+                    "API call failed for batch %d: %s", batch_number, exc,
+                    exc_info=True,
                 )
-                db.mark_failed(row["id"])
+                # Revert all images in batch to Pending for retry
+                failed_ids = [image_map[lbl]["db_row"]["id"] for lbl in image_map]
+                db.revert_to_pending(failed_ids)
 
-        # ── Step 7: Handle mismatches ────────────────────────
-        unmatched_labels = set(image_map.keys()) - matched_labels
-        if unmatched_labels:
-            logger.warning(
-                "MISMATCH: AI returned %d results for %d images. "
-                "Missing labels: %s — reverting to Pending",
-                len(matched_labels), actual_count, unmatched_labels,
+                if test_mode:
+                    logger.info("--test-mode: stopping after 1 batch (API error)")
+                    break
+                continue
+
+            # ── Step 4: Record token usage ───────────────────────
+            if hasattr(response, "usage_metadata") and response.usage_metadata:
+                usage = response.usage_metadata
+                cost_result = cost_tracker.record_usage(
+                    input_tokens=getattr(usage, "prompt_token_count", 0) or 0,
+                    output_tokens=getattr(usage, "candidates_token_count", 0) or 0,
+                )
+                logger.info("Batch %d cost: %s", batch_number, cost_result.format_display())
+
+            # ── Step 5: Parse JSON response ──────────────────────
+            try:
+                response_text = response.text
+                results = json.loads(response_text)
+                if not isinstance(results, list):
+                    raise ValueError(f"Expected JSON array, got: {type(results)}")
+                logger.debug("Parsed %d results from API response", len(results))
+
+            except (json.JSONDecodeError, ValueError, AttributeError) as exc:
+                logger.error(
+                    "Failed to parse API response for batch %d: %s\nRaw: %s",
+                    batch_number, exc,
+                    getattr(response, "text", "<no text>"),
+                )
+                failed_ids = [image_map[lbl]["db_row"]["id"] for lbl in image_map]
+                db.revert_to_pending(failed_ids)
+
+                if test_mode:
+                    logger.info("--test-mode: stopping after 1 batch (parse error)")
+                    break
+                continue
+
+            # ── Step 6: Match results to images ──────────────────
+            matched_labels = set()
+            batch_processed = 0
+
+            for result_obj in results:
+                label = result_obj.get("image", "")
+                category = result_obj.get("category", "Uncategorized_Review")
+
+                if label not in image_map:
+                    logger.warning("Unknown label in response: '%s' — skipping", label)
+                    continue
+
+                matched_labels.add(label)
+                img_info = image_map[label]
+                row = img_info["db_row"]
+                date = img_info["date"]
+                jpeg_bytes = img_info["jpeg_bytes"]
+
+                # ── Move the file ────────────────────────────────
+                try:
+                    move_image(
+                        src_path=row["file_path"],
+                        category=category,
+                        date=date,
+                        output_dir=config.output_dir,
+                        exif_restore=config.features.restore_exif_date,
+                    )
+                    db.mark_completed(row["id"], category)
+                    batch_processed += 1
+
+                except Exception as exc:
+                    logger.error(
+                        "Failed to move image %s (%s): %s",
+                        label, row["file_path"], exc,
+                    )
+                    db.mark_failed(row["id"])
+
+            # ── Step 7: Handle mismatches ────────────────────────
+            unmatched_labels = set(image_map.keys()) - matched_labels
+            if unmatched_labels:
+                logger.warning(
+                    "MISMATCH: AI returned %d results for %d images. "
+                    "Missing labels: %s — reverting to Pending",
+                    len(matched_labels), actual_count, unmatched_labels,
+                )
+                unmatched_ids = [
+                    image_map[lbl]["db_row"]["id"]
+                    for lbl in unmatched_labels
+                ]
+                db.revert_to_pending(unmatched_ids)
+
+            total_processed += batch_processed
+            logger.info(
+                "Batch %s complete: %d/%d processed, %d mismatched",
+                progress_str, batch_processed, actual_count, len(unmatched_labels),
             )
-            unmatched_ids = [
-                image_map[lbl]["db_row"]["id"]
-                for lbl in unmatched_labels
-            ]
-            db.revert_to_pending(unmatched_ids)
 
-        total_processed += batch_processed
-        logger.info(
-            "Batch %d complete: %d/%d processed, %d mismatched",
-            batch_number, batch_processed, actual_count, len(unmatched_labels),
-        )
+            # ── Test mode: exit after first batch ────────────────
+            if test_mode:
+                logger.info("--test-mode: stopping after 1 batch")
+                break
 
-        # ── Test mode: exit after first batch ────────────────
-        if test_mode:
-            logger.info("--test-mode: stopping after 1 batch")
-            break
+    except KeyboardInterrupt:
+        logger.warning("Processing interrupted by user during batch %s (Ctrl+C)", progress_str)
+        # Revert the current batch's pending images if necessary
+        # The finally block in main handles the rest
 
     logger.info("Standard mode finished: %d images processed total", total_processed)
     return total_processed
