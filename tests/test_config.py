@@ -162,3 +162,46 @@ class TestConfigValidation:
             config = load_config(config_path=path, env_path=None)
 
         assert config.api_mode == "standard"
+
+    def test_upload_threads_defaults_to_10(self, tmp_path):
+        """Missing upload_threads should default to 10."""
+        cfg = self._base_config(tmp_path)
+        # Don't set upload_threads — should default
+        path = self._write_config(tmp_path, cfg)
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "key"}):
+            config = load_config(config_path=path, env_path=None)
+
+        assert config.upload_threads == 10
+
+    def test_upload_threads_custom_value(self, tmp_path):
+        """Explicit upload_threads value should be respected."""
+        cfg = self._base_config(tmp_path)
+        cfg["upload_threads"] = 20
+        path = self._write_config(tmp_path, cfg)
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "key"}):
+            config = load_config(config_path=path, env_path=None)
+
+        assert config.upload_threads == 20
+
+    def test_upload_threads_zero_exits(self, tmp_path):
+        """upload_threads=0 should sys.exit (below minimum 1)."""
+        cfg = self._base_config(tmp_path)
+        cfg["upload_threads"] = 0
+        path = self._write_config(tmp_path, cfg)
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "key"}):
+            with pytest.raises(SystemExit):
+                load_config(config_path=path, env_path=None)
+
+    def test_upload_threads_above_max_exits(self, tmp_path):
+        """upload_threads=51 should sys.exit (above maximum 50)."""
+        cfg = self._base_config(tmp_path)
+        cfg["upload_threads"] = 51
+        path = self._write_config(tmp_path, cfg)
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "key"}):
+            with pytest.raises(SystemExit):
+                load_config(config_path=path, env_path=None)
+

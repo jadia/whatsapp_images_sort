@@ -32,9 +32,8 @@ graph TB
         O -->|No| P[Phase 1: Submit]
         O -->|Yes| Q[Phase 2: Resume]
 
-        P --> P1[Resize Images]
-        P1 --> P2[Upload to File API]
-        P2 --> P3[Build JSONL]
+        P --> P1["Resize + Upload\n(ThreadPoolExecutor)"]
+        P1 --> P3[Build JSONL]
         P3 --> P4[Submit Batch Job]
         P4 --> P5[Save to DB & EXIT]
 
@@ -52,6 +51,7 @@ graph TB
         LOG[Logger\nconsole + file]
         CFG[Config\nconfig.json + .env]
         COST[Cost Tracker]
+        RETRY[Retry w/ Backoff]
     end
 ```
 
@@ -100,8 +100,8 @@ sequenceDiagram
 
 Batch mode is fully asynchronous and significantly cheaper, designed for bulk processing. It operates in two lifecycle phases to allow the user to close the terminal while Google processes the data in the background.
 
-**Phase 1** uploads the raw, resized images to the Gemini File API and submits the manifest `.jsonl`.
-**Phase 2** (triggered on a subsequent run of the script) polls the job status. When successful, it pulls the results, categorizes the files, and crucially, executes a cleanup sweep of the File API to prevent exhausting the user's storage quota.
+**Phase 1** resizes and uploads images in parallel using `ThreadPoolExecutor` (configurable via `upload_threads`). Each upload is wrapped in `retry_with_backoff()` to handle rate limits. If the user presses Ctrl+C, all orphaned files are cleaned up from the File API before exiting. After uploads complete, the JSONL manifest is submitted.
+**Phase 2** (triggered on a subsequent run of the script) polls the job status. When successful, it pulls the results, categorizes the files, and executes a parallel cleanup sweep of the File API to prevent exhausting the user's storage quota.
 
 ```mermaid
 sequenceDiagram
@@ -116,8 +116,8 @@ sequenceDiagram
     Main->>DB: get_pending_batch(1000)
     DB-->>Main: [1000 images]
 
-    loop Upload each image
-        Main->>FileAPI: upload(resized_jpeg)
+    loop ThreadPoolExecutor (upload_threads)
+        Main->>FileAPI: upload(resized_jpeg) [with retry]
         FileAPI-->>Main: file_uri
     end
 
@@ -216,9 +216,10 @@ whatsapp_images_sort/
 │   ├── image_utils.py       # Resize, date, EXIF
 │   ├── prompt_builder.py    # Gemini prompt construction
 │   ├── standard_mode.py     # Sync processing engine
-│   ├── batch_mode.py        # Async processing engine
+│   ├── batch_mode.py        # Async processing engine (parallel uploads)
 │   ├── file_mover.py        # Sorted directory management
 │   ├── cost_tracker.py      # Token & cost accounting
+│   ├── retry.py             # Exponential back-off retry utility
 │   └── logger_setup.py      # Logging configuration
 ├── logs/                    # Per-run audit logs
 ├── error.log                # API error log (append)

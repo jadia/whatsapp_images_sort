@@ -51,6 +51,7 @@ def sample_config(tmp_dirs):
         active_model="gemini-3-flash-lite",
         batch_chunk_size=100,
         standard_club_size=3,
+        upload_threads=10,
         source_dir=tmp_dirs["source"],
         output_dir=tmp_dirs["output"],
         features=FeaturesConfig(restore_exif_date=False),

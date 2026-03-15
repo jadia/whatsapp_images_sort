@@ -1,8 +1,9 @@
 {
-  "api_mode": "standard",
-  "active_model": "gemini-3-flash-preview",
+  "api_mode": "batch",
+  "active_model": "gemini-3.1-flash-lite-preview",
   "batch_chunk_size": 1000,
   "standard_club_size": 10,
+  "upload_threads": 10,
   "source_dir": "/path/to/WhatsApp/Media",
   "output_dir": "/path/to/Sorted",
   "features": {

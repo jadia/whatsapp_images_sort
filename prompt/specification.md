@@ -30,6 +30,7 @@ The application is strictly driven by a `config.json` file.
   "active_model": "gemini-3-flash-lite",
   "batch_chunk_size": 1000,
   "standard_club_size": 10,
+  "upload_threads": 10,
   "source_dir": "/path/to/WhatsApp/Media",
   "output_dir": "/path/to/Sorted",
   "features": {
@@ -52,6 +53,18 @@ The application is strictly driven by a `config.json` file.
   ]
 }
 ```
+
+- **`upload_threads`** (default: `10`, range: `1–50`): Number of parallel threads for uploading images to the Gemini File API in batch mode. Higher values speed up Phase 1 submissions proportionally.
+
+---
+
+## 1b. Retry & Rate Limiting
+
+All API calls (uploads, deletions, `generate_content`, `batches.create`) are wrapped in `retry_with_backoff()` with:
+- **Max retries:** 3
+- **Back-off:** Exponential (1s → 2s → 4s) with random jitter, capped at 60s
+- **Retryable errors:** HTTP 429 (ResourceExhausted), 500, 503, 504, plus `ConnectionError`, `TimeoutError`, `OSError`
+- **Non-retryable errors:** `ValueError`, `TypeError`, `KeyboardInterrupt` — these propagate immediately
 
 ---
 

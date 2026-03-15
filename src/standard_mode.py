@@ -32,6 +32,7 @@ from src.database import Database, STATUS_PENDING
 from src.file_mover import move_image
 from src.image_utils import extract_date, resize_image
 from src.prompt_builder import build_standard_prompt
+from src.retry import retry_with_backoff
 
 logger = logging.getLogger("whatsapp_sorter")
 
@@ -183,16 +184,19 @@ def run_standard_mode(
             try:
                 logger.info("Sending %d image(s) to Gemini API (waiting for response)...", actual_count)
 
-                response = client.models.generate_content(
-                    model=config.active_model,
-                    contents=types.Content(
-                        role="user",
-                        parts=content_parts,
+                response = retry_with_backoff(
+                    fn=lambda: client.models.generate_content(
+                        model=config.active_model,
+                        contents=types.Content(
+                            role="user",
+                            parts=content_parts,
+                        ),
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.1,
+                        ),
                     ),
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.1,
-                    ),
+                    description=f"Gemini API batch {batch_number}",
                 )
 
                 logger.info("API response received for Batch %s", progress_str)
@@ -319,5 +323,5 @@ def run_standard_mode(
     finally:
         pbar.close()
 
-    logger.info("Standard mode finished: %d images processed total", session_processed)
-    return session_processed
+    logger.info("Standard mode finished: %d images processed total", total_processed)
+    return total_processed
