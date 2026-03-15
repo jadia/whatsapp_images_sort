@@ -28,8 +28,8 @@ logger = logging.getLogger("whatsapp_sorter")
 # Vision tokens for a 384×384 JPEG dominate the input side at
 # roughly 1,000–1,100 tokens depending on image complexity.
 # The text prompt adds ~50–150 tokens shared across all images.
-AVG_INPUT_TOKENS_PER_IMAGE = 1_120  # vision tokens + prompt share
-AVG_OUTPUT_TOKENS_PER_IMAGE = 30    # JSON response per image
+AVG_INPUT_TOKENS_PER_IMAGE = 1_187  # vision tokens + prompt share
+AVG_OUTPUT_TOKENS_PER_IMAGE = 19    # JSON response per image
 
 
 @dataclass
