@@ -1,0 +1,22 @@
+# ============================================================
+# WhatsApp Image Sorter — Dependencies
+# ============================================================
+
+# Google GenAI SDK (Gemini API)
+google-genai>=1.0.0
+
+# Image processing
+Pillow>=10.0.0
+
+# EXIF metadata manipulation
+piexif>=1.1.3
+
+# Environment variable loading (.env files)
+python-dotenv>=1.0.0
+
+# Progress bar
+tqdm>=4.60.0
+
+# ---- Dev / Test dependencies ----
+pytest>=7.0.0
+pytest-cov>=4.0.0

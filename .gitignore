@@ -1,0 +1,43 @@
+# Environment & secrets
+.env
+*.key
+test_data/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project state
+state.db
+state.db-wal
+state.db-shm
+logs/
+error.log
+
+# Batch processing artifacts
+batch_input_*.jsonl
+batch_output_*.jsonl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage

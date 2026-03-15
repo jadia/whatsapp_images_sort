@@ -1,0 +1,32 @@
+{
+  "api_mode": "standard",
+  "active_model": "gemini-3-flash-lite",
+  "batch_chunk_size": 1000,
+  "standard_club_size": 10,
+  "source_dir": "/path/to/WhatsApp/Media",
+  "output_dir": "/path/to/Sorted",
+  "features": {
+    "restore_exif_date": true
+  },
+  "pricing": {
+    "gemini-3-flash-lite": {
+      "input_per_1m": 0.075,
+      "output_per_1m": 0.30
+    },
+    "gemini-3-flash": {
+      "input_per_1m": 0.35,
+      "output_per_1m": 1.05
+    }
+  },
+  "currency": {
+    "symbol": "₹",
+    "usd_exchange_rate": 83.50
+  },
+  "whatsapp_categories": [
+    "Documents & IDs",
+    "Financial & Receipts",
+    "People & Social",
+    "Memes & Junk",
+    "Scenery & Objects"
+  ]
+}
