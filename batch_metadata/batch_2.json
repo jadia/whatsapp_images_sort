@@ -1,0 +1,62 @@
+[
+  {
+    "label": "Image_1",
+    "file_api_name": "files/jsrfhlm5hlaq",
+    "file_uri": "https://generativelanguage.googleapis.com/v1beta/files/jsrfhlm5hlaq",
+    "file_path": "/home/nitish/workspace/gemini_generations/whatsapp_images_sort/test_data/IMG-20250308-WA0000.jpg"
+  },
+  {
+    "label": "Image_2",
+    "file_api_name": "files/4yyuv9hkr4as",
+    "file_uri": "https://generativelanguage.googleapis.com/v1beta/files/4yyuv9hkr4as",
+    "file_path": "/home/nitish/workspace/gemini_generations/whatsapp_images_sort/test_data/IMG-20250308-WA0001.jpg"
+  },
+  {
+    "label": "Image_3",
+    "file_api_name": "files/dfq9tw90gojl",
+    "file_uri": "https://generativelanguage.googleapis.com/v1beta/files/dfq9tw90gojl",
+    "file_path": "/home/nitish/workspace/gemini_generations/whatsapp_images_sort/test_data/IMG-20250308-WA0002.jpg"
+  },
+  {
+    "label": "Image_4",
+    "file_api_name": "files/pchy4h0qqy2a",
+    "file_uri": "https://generativelanguage.googleapis.com/v1beta/files/pchy4h0qqy2a",
+    "file_path": "/home/nitish/workspace/gemini_generations/whatsapp_images_sort/test_data/IMG-20250308-WA0003.jpg"
+  },
+  {
+    "label": "Image_5",
+    "file_api_name": "files/o9sout7jt0l3",
+    "file_uri": "https://generativelanguage.googleapis.com/v1beta/files/o9sout7jt0l3",
+    "file_path": "/home/nitish/workspace/gemini_generations/whatsapp_images_sort/test_data/IMG-20250308-WA0004.jpg"
+  },
+  {
+    "label": "Image_6",
+    "file_api_name": "files/eho5csiqzfe8",
+    "file_uri": "https://generativelanguage.googleapis.com/v1beta/files/eho5csiqzfe8",
+    "file_path": "/home/nitish/workspace/gemini_generations/whatsapp_images_sort/test_data/IMG-20250308-WA0005.jpg"
+  },
+  {
+    "label": "Image_7",
+    "file_api_name": "files/wu01dw31hibz",
+    "file_uri": "https://generativelanguage.googleapis.com/v1beta/files/wu01dw31hibz",
+    "file_path": "/home/nitish/workspace/gemini_generations/whatsapp_images_sort/test_data/IMG-20250308-WA0006.jpg"
+  },
+  {
+    "label": "Image_8",
+    "file_api_name": "files/3duvb7y0ite9",
+    "file_uri": "https://generativelanguage.googleapis.com/v1beta/files/3duvb7y0ite9",
+    "file_path": "/home/nitish/workspace/gemini_generations/whatsapp_images_sort/test_data/IMG-20250308-WA0007.jpg"
+  },
+  {
+    "label": "Image_9",
+    "file_api_name": "files/8s34pat191nq",
+    "file_uri": "https://generativelanguage.googleapis.com/v1beta/files/8s34pat191nq",
+    "file_path": "/home/nitish/workspace/gemini_generations/whatsapp_images_sort/test_data/IMG-20250308-WA0008.jpg"
+  },
+  {
+    "label": "Image_10",
+    "file_api_name": "files/hq3f6u8ihgkp",
+    "file_uri": "https://generativelanguage.googleapis.com/v1beta/files/hq3f6u8ihgkp",
+    "file_path": "/home/nitish/workspace/gemini_generations/whatsapp_images_sort/test_data/IMG-20250308-WA0009.jpg"
+  }
+]

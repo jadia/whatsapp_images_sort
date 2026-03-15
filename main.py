@@ -198,8 +198,8 @@ def main() -> None:
     completed_count = queue_stats.get("Completed", 0)
 
     cost_tracker = CostTracker(config)
-    # Calibrate tracker with actual historical usage from DB
-    estimation_stats = db.get_estimation_stats()
+    # Calibrate tracker with actual historical usage from DB for this specific model
+    estimation_stats = db.get_estimation_stats(config.active_model)
     cost_tracker.calibrate_from_db(estimation_stats)
 
     if args.dry_run:
@@ -271,14 +271,15 @@ def main() -> None:
         cost_local_currency=session_cost.cost_local,
     )
 
-    # Update global estimation stats with this session's actuals
+    # Update global estimation stats with this session's actuals for this model
     actuals = cost_tracker.get_estimation_actuals()
-    db.update_estimation_stats(*actuals)
+    db.update_estimation_stats(config.active_model, *actuals)
 
     # Final summary
     print("\n═══ SESSION SUMMARY ═══════════════════════════════")
     print(f"  Session ID : {session_id}")
     print(f"  Mode       : {config.api_mode}")
+    print(f"  Model      : {config.active_model}")
     print(f"  Processed  : {processed:,} images")
     print(f"  Cost       : {session_cost.format_display()}")
 

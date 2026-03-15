@@ -3,6 +3,7 @@
 *.key
 test_data/
 test_data_sorted/
+batch_metadata/
 
 # Python
 __pycache__/

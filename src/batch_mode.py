@@ -427,7 +427,7 @@ def _handle_batch_success(
 
             if dest_file_name:
                 # Download the output file content
-                output_content = client.files.download(name=dest_file_name)
+                output_content = client.files.download(file=dest_file_name)
 
                 # Parse each line of the JSONL output
                 for line in output_content.strip().split("\n"):
