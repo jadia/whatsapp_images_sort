@@ -249,7 +249,7 @@ class TestFileAPICleanup:
         mock_client = MagicMock()
         file_names = ["files/abc", "files/def", "files/ghi"]
 
-        _cleanup_file_api(mock_client, file_names)
+        _cleanup_file_api(mock_client, batch_env["config"], file_names)
 
         assert mock_client.files.delete.call_count == 3
 
@@ -261,11 +261,11 @@ class TestFileAPICleanup:
         mock_client.files.delete.side_effect = Exception("Quota exceeded")
 
         # Should not raise
-        _cleanup_file_api(mock_client, ["files/abc"])
+        _cleanup_file_api(mock_client, batch_env["config"], ["files/abc"])
 
-    def test_cleanup_with_none_client(self):
+    def test_cleanup_with_none_client(self, batch_env):
         """Should handle None client gracefully."""
         from src.batch_mode import _cleanup_file_api
 
         # Should not raise
-        _cleanup_file_api(None, ["files/abc"])
+        _cleanup_file_api(None, batch_env["config"], ["files/abc"])

@@ -166,10 +166,10 @@ When a batch completes successfully, the application does *not* actually "move" 
 
 **How does the script know what has been processed?**
 It does not rely on comparing the source and destination folders. Instead, it tracks the exact state of every single file using the SQLite Database (`state.db`).
-1. **Scanning**: On startup, `main.py` scans the source directory.
-2. **Enqueuing**: It checks the DB. If a file path isn't in the DB, it inserts it with a `Pending` status.
-3. **Processing**: When standard mode or batch mode successfully categorize an image and copy it to the destination, that specific row in the DB is updated to `Completed`.
-4. **Resuming**: The next time you run the script, `main.py` queries the database for files that are *still* `Pending`. It completely ignores files marked as `Completed`, which prevents duplicate processing and saves API costs.
+1. **Scanning**: On startup, `main.py` scans the source directory. Next, it silently **auto-prunes** the database, deleting any previously stored table rows referring to images that no longer physically exist on disk (meaning the user manually deleted them while the tool was offline).
+2. **Enqueuing**: It checks the DB. If an existing image path isn't in the DB, it inserts it with a `Pending` status.
+3. **Processing**: When standard mode or batch mode successfully categorize an image and copy it to the destination, that specific row in the DB is updated to `Completed`. If the file was corrupted or unreadable, it is silently marked as `Missing`.
+4. **Resuming**: The next time you run the script, `main.py` queries the database for files that are *still* `Pending`. It completely ignores files marked as `Completed` or `Missing`, which prevents duplicate processing and saves API costs.
 
 ## Database Schema
 
@@ -184,7 +184,7 @@ erDiagram
     ImageQueue {
         int id PK
         text file_path UK
-        text status
+        text status "Pending | Processing | Completed | Failed | Missing"
         text category
         int retry_count
         int batch_job_id FK

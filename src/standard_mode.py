@@ -165,6 +165,10 @@ def run_standard_mode(
                     }
                     logger.debug("Prepared %s: %s", label, file_path)
 
+                except (FileNotFoundError, PermissionError) as exc:
+                    logger.warning("File missing or unreadable %s: %s", file_path, exc)
+                    db.mark_missing(row["id"])
+
                 except Exception as exc:
                     logger.error("Failed to prepare image %s: %s", file_path, exc)
                     db.mark_failed(row["id"])

@@ -109,6 +109,9 @@ def _print_dry_run_summary(
     print(f"    Pending   : {pending:,}")
     print(f"    Completed : {completed:,}")
     print(f"    Failed    : {failed:,}")
+    missing = queue_stats.get("Missing", 0)
+    if missing > 0:
+        print(f"    Missing   : {missing:,}")
     print()
     print(f"  ── Estimated Cost (for {pending:,} pending images) ──")
     print(f"  {estimate.format_display()}")
@@ -146,6 +149,11 @@ def main() -> None:
         action="store_true",
         help="Scan images, show stats and cost estimate, but make no changes",
     )
+    parser.add_argument(
+        "--prune-queue",
+        action="store_true",
+        help="Clear the image queue database tracking completely",
+    )
     args = parser.parse_args()
 
     # ── Step 1: Set up logging ───────────────────────────────
@@ -164,9 +172,18 @@ def main() -> None:
     db = Database()
     logger.info("Database ready")
 
+    if args.prune_queue:
+        db.truncate_queue()
+        print("\n  Image queue has been successfully cleared.\n")
+        db.close()
+        return
+
     # ── Step 4: Scan source directory and enqueue new images ──
     image_paths = _scan_source_directory(config.source_dir)
     total_images = len(image_paths)
+    
+    # Prune Database: Remove DB rows for files that were deleted from disk
+    db.prune_missing_files(set(image_paths))
 
     if total_images == 0:
         logger.info("No image files found in %s — nothing to do", config.source_dir)

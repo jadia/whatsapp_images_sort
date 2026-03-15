@@ -173,7 +173,15 @@ def _upload_single_image(
             "date": date,
         }
 
+    except (FileNotFoundError, PermissionError) as exc:
+        logger.warning("File missing or unreadable, skipping %s: %s", file_path, exc)
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        return {"error": "Missing", "db_row": row}
+
     except Exception as exc:
+        # Some generic exception (API error, PIL error, etc)
+        # If it's a PIL error, consider adding PIL.UnidentifiedImageError to the tuple above.
         logger.error("Failed to prepare/upload %s (%s): %s", label, file_path, exc)
         # Clean up temp file if it exists
         if tmp_path and os.path.exists(tmp_path):
@@ -228,6 +236,7 @@ def _submit_batch_job(
         # ── Step 1: Resize and upload images in parallel ─────────
         pbar = tqdm(total=len(pending), desc="Uploading to Gemini", unit="img")
         failed_ids: List[int] = []
+        missing_ids: List[int] = []
 
         with ThreadPoolExecutor(max_workers=config.upload_threads) as executor:
             # Submit all upload tasks
@@ -245,8 +254,11 @@ def _submit_batch_job(
                 try:
                     result = future.result()
                     if result is not None:
-                        with uploaded_lock:
-                            uploaded_files.append(result)
+                        if "error" in result and result["error"] == "Missing":
+                            missing_ids.append(row["id"])
+                        else:
+                            with uploaded_lock:
+                                uploaded_files.append(result)
                     else:
                         failed_ids.append(row["id"])
                 except Exception as exc:
@@ -257,9 +269,11 @@ def _submit_batch_job(
 
         pbar.close()
 
-        # Mark failed images
+        # Mark failed and missing images
         for fid in failed_ids:
             db.mark_failed(fid)
+        for mid in missing_ids:
+            db.mark_missing(mid)
 
         if not uploaded_files:
             logger.error("No images could be uploaded — aborting batch submission")
@@ -355,8 +369,8 @@ def _submit_batch_job(
             # Attempt to clean up File API uploads
             _cleanup_file_api(
                 client, 
-                [item["file_api_name"] for item in uploaded_files], 
-                max_workers=config.upload_threads
+                config,
+                [item["file_api_name"] for item in uploaded_files]
             )
             if os.path.exists(jsonl_path):
                 os.unlink(jsonl_path)
@@ -372,14 +386,11 @@ def _submit_batch_job(
         # Store the file API names for later cleanup
         _save_batch_metadata(job_id, uploaded_files)
 
-        logger.info(
-            "╔══════════════════════════════════════════════════╗\n"
-            "║  Batch job submitted successfully!               ║\n"
-            "║  Job: %-42s ║\n"
-            "║  Images: %-39d ║\n"
-            "╚══════════════════════════════════════════════════╝",
-            api_job_name, len(uploaded_files),
-        )
+        logger.info("╔══════════════════════════════════════════════════╗")
+        logger.info("║  Batch job submitted successfully!               ║")
+        logger.info("║  Job: %-42s ║", api_job_name)
+        logger.info("║  Images: %-39d ║", len(uploaded_files))
+        logger.info("╚══════════════════════════════════════════════════╝")
 
         return True  # Submitted successfully
 
@@ -394,7 +405,7 @@ def _submit_batch_job(
             file_names_to_delete.append(jsonl_file.name)
 
         if file_names_to_delete:
-            _cleanup_file_api(client, file_names_to_delete, max_workers=config.upload_threads)
+            _cleanup_file_api(client, config, file_names_to_delete)
 
         # Re-raise so main.py can catch it and print the session summary
         raise
@@ -405,7 +416,7 @@ def _submit_batch_job(
         if jsonl_file:
             file_names_to_delete.append(jsonl_file.name)
         if file_names_to_delete:
-            _cleanup_file_api(client, file_names_to_delete, max_workers=config.upload_threads)
+            _cleanup_file_api(client, config, file_names_to_delete)
         raise
 
 
@@ -487,10 +498,10 @@ def _resume_batch_job(
     if job_state in ("JOB_STATE_FAILED", "FAILED"):
         return _handle_batch_failure(
             client=client,
+            config=config,
             db=db,
             job_id=job_id,
             api_job_name=api_job_name,
-            max_workers=config.upload_threads,
         )
 
     # Unknown state
@@ -615,7 +626,7 @@ def _handle_batch_success(
     metadata = _load_batch_metadata(job_id)
     if metadata:
         file_names = [item["file_api_name"] for item in metadata]
-        _cleanup_file_api(client, file_names, max_workers=config.upload_threads)
+        _cleanup_file_api(client, config, file_names)
 
     logger.info(
         "Batch job complete: %d/%d processed, %d mismatched",
@@ -626,10 +637,10 @@ def _handle_batch_success(
 
 def _handle_batch_failure(
     client: genai.Client,
+    config: AppConfig,
     db: Database,
     job_id: int,
     api_job_name: str,
-    max_workers: int = 10,
 ) -> int:
     """
     Handle a failed batch job.
@@ -655,7 +666,7 @@ def _handle_batch_failure(
     metadata = _load_batch_metadata(job_id)
     if metadata:
         file_names = [item["file_api_name"] for item in metadata]
-        _cleanup_file_api(client, file_names, max_workers=max_workers)
+        _cleanup_file_api(client, config, file_names)
 
     return 0
 
@@ -664,19 +675,20 @@ def _handle_batch_failure(
 
 def _cleanup_file_api(
     client: Optional[genai.Client],
+    config: AppConfig,
     file_names: List[str],
-    max_workers: int = 15,
 ) -> None:
     """
     Delete temporary files from the Gemini File API in parallel.
 
     Frees user quota. Logs but does not raise on failure
-    (cleanup failures are non-fatal).
+    (cleanup failures are non-fatal). Uses thread counts directly
+    from the application configuration.
 
     Args:
         client: Gemini API client.
+        config: Loaded AppConfig to read `upload_threads`.
         file_names: List of File API resource names to delete.
-        max_workers: Number of threads to use for parallel deletions.
     """
     if not client or not file_names:
         return
@@ -697,7 +709,7 @@ def _cleanup_file_api(
             logger.warning("Failed to delete %s: %s", name, exc)
             return False
 
-    actual_workers = min(max_workers, len(file_names))
+    actual_workers = min(config.upload_threads, len(file_names))
     with ThreadPoolExecutor(max_workers=actual_workers) as executor:
         futures = {executor.submit(_delete_one, name): name for name in file_names}
         
