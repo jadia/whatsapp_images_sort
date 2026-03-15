@@ -33,6 +33,7 @@ from typing import Dict, List, Optional, Tuple
 
 from google import genai
 from google.genai import types
+from tqdm import tqdm
 
 from src.config_manager import AppConfig
 from src.cost_tracker import CostTracker
@@ -147,173 +148,204 @@ def _submit_batch_job(
         )
         return 0
 
-    # ── Step 1: Resize and upload images to File API ─────────
+    # Initialize tracking variables for cleanup
     uploaded_files: List[Dict] = []  # {label, file_api_name, file_uri, db_row}
-    image_dates: Dict[str, Optional[object]] = {}  # Store dates for later
-
-    for i, row in enumerate(pending, start=1):
-        label = f"Image_{i}"
-        file_path = row["file_path"]
-
-        try:
-            # Resize the image
-            jpeg_bytes = resize_image(file_path)
-            date = extract_date(file_path)
-            image_dates[label] = date
-
-            # Write resized bytes to a temp file for upload
-            with tempfile.NamedTemporaryFile(
-                suffix=".jpg", delete=False, prefix=f"batch_{label}_"
-            ) as tmp:
-                tmp.write(jpeg_bytes)
-                tmp_path = tmp.name
-
-            # Upload to Gemini File API
-            logger.debug("Uploading %s to File API...", label)
-            uploaded_file = client.files.upload(
-                file=tmp_path,
-                config=types.UploadFileConfig(
-                    display_name=f"{label}_{os.path.basename(file_path)}",
-                    mime_type="image/jpeg",
-                ),
-            )
-
-            # Clean up temp file
-            os.unlink(tmp_path)
-
-            uploaded_files.append({
-                "label": label,
-                "file_api_name": uploaded_file.name,
-                "file_uri": uploaded_file.uri,
-                "db_row": row,
-            })
-            logger.debug(
-                "Uploaded %s → %s (%s)",
-                label, uploaded_file.name, uploaded_file.uri,
-            )
-
-        except Exception as exc:
-            logger.error("Failed to prepare/upload %s (%s): %s", label, file_path, exc)
-            db.mark_failed(row["id"])
-            # Clean up temp file if it exists
-            if "tmp_path" in locals() and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-
-    if not uploaded_files:
-        logger.error("No images could be uploaded — aborting batch submission")
-        return 0
-
-    logger.info("Uploaded %d images to File API", len(uploaded_files))
-
-    # ── Step 2: Build JSONL input file ───────────────────────
-    category_list = ", ".join(f'"{cat}"' for cat in config.whatsapp_categories)
-    jsonl_lines = []
-
-    for item in uploaded_files:
-        prompt_text = (
-            f'Classify this image into exactly ONE category from: [{category_list}]. '
-            f'If it does not fit any category, use "Uncategorized_Review". '
-            f'Return ONLY a JSON object: {{"image": "{item["label"]}", "category": "<chosen>"}}'
-        )
-
-        request_obj = {
-            "key": item["label"],
-            "request": {
-                "model": f"models/{config.active_model}",
-                "contents": [
-                    {
-                        "role": "user",
-                        "parts": [
-                            {"text": prompt_text},
-                            {
-                                "file_data": {
-                                    "file_uri": item["file_uri"],
-                                    "mime_type": "image/jpeg",
-                                }
-                            },
-                        ],
-                    }
-                ],
-                "generation_config": {
-                    "response_mime_type": "application/json",
-                    "temperature": 0.1,
-                },
-            },
-        }
-        jsonl_lines.append(json.dumps(request_obj))
-
-    # Write JSONL to a temp file
-    jsonl_content = "\n".join(jsonl_lines)
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", delete=False, prefix="batch_input_"
-    ) as jf:
-        jf.write(jsonl_content)
-        jsonl_path = jf.name
-
-    logger.debug("JSONL input file created: %s (%d lines)", jsonl_path, len(jsonl_lines))
-
-    # ── Step 3: Upload JSONL and submit batch job ────────────
+    jsonl_file = None
+    
     try:
-        # Upload the JSONL file
-        jsonl_file = client.files.upload(
-            file=jsonl_path,
-            config=types.UploadFileConfig(
-                display_name="batch_input.jsonl",
-                mime_type="application/jsonl",
-            ),
-        )
-        logger.debug("JSONL uploaded → %s", jsonl_file.name)
+        # ── Step 1: Resize and upload images to File API ─────────
+            image_dates: Dict[str, Optional[object]] = {}  # Store dates for later
+    
+            # Create the tqdm progress bar
+            pbar = tqdm(pending, desc="Uploading to Gemini", unit="img")
+        
+            for i, row in enumerate(pbar, start=1):
+                label = f"Image_{i}"
+                file_path = row["file_path"]
+    
+                try:
+                    # Resize the image
+                    jpeg_bytes = resize_image(file_path)
+                    date = extract_date(file_path)
+                    image_dates[label] = date
+    
+                    # Write resized bytes to a temp file for upload
+                    with tempfile.NamedTemporaryFile(
+                        suffix=".jpg", delete=False, prefix=f"batch_{label}_"
+                    ) as tmp:
+                        tmp.write(jpeg_bytes)
+                        tmp_path = tmp.name
+    
+                    # Upload to Gemini File API
+                    logger.debug("Uploading %s to File API...", label)
+                    uploaded_file = client.files.upload(
+                        file=tmp_path,
+                        config=types.UploadFileConfig(
+                            display_name=f"{label}_{os.path.basename(file_path)}",
+                            mime_type="image/jpeg",
+                        ),
+                    )
+    
+                    # Clean up temp file
+                    os.unlink(tmp_path)
+    
+                    uploaded_files.append({
+                        "label": label,
+                        "file_api_name": uploaded_file.name,
+                        "file_uri": uploaded_file.uri,
+                        "db_row": row,
+                    })
+                    logger.debug(
+                        "Uploaded %s → %s (%s)",
+                        label, uploaded_file.name, uploaded_file.uri,
+                    )
+    
+                except Exception as exc:
+                    logger.error("Failed to prepare/upload %s (%s): %s", label, file_path, exc)
+                    db.mark_failed(row["id"])
+                    # Clean up temp file if it exists
+                    if "tmp_path" in locals() and os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+    
+            if not uploaded_files:
+                logger.error("No images could be uploaded — aborting batch submission")
+                return 0
+    
+            logger.info("Uploaded %d images to File API", len(uploaded_files))
+    
+            # ── Step 2: Build JSONL input file ───────────────────────
+            category_list = ", ".join(f'"{cat}"' for cat in config.whatsapp_categories)
+            jsonl_lines = []
+    
+            for item in uploaded_files:
+                prompt_text = (
+                    f'Classify this image into exactly ONE category from: [{category_list}]. '
+                    f'If it does not fit any category, use "Uncategorized_Review". '
+                    f'Return ONLY a JSON object: {{"image": "{item["label"]}", "category": "<chosen>"}}'
+                )
+    
+                request_obj = {
+                    "key": item["label"],
+                    "request": {
+                        "model": f"models/{config.active_model}",
+                        "contents": [
+                            {
+                                "role": "user",
+                                "parts": [
+                                    {"text": prompt_text},
+                                    {
+                                        "file_data": {
+                                            "file_uri": item["file_uri"],
+                                            "mime_type": "image/jpeg",
+                                        }
+                                    },
+                                ],
+                            }
+                        ],
+                        "generation_config": {
+                            "response_mime_type": "application/json",
+                            "temperature": 0.1,
+                        },
+                    },
+                }
+                jsonl_lines.append(json.dumps(request_obj))
+    
+            # Write JSONL to a temp file
+            jsonl_content = "\n".join(jsonl_lines)
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".jsonl", delete=False, prefix="batch_input_"
+            ) as jf:
+                jf.write(jsonl_content)
+                jsonl_path = jf.name
+    
+            logger.debug("JSONL input file created: %s (%d lines)", jsonl_path, len(jsonl_lines))
+    
+            # ── Step 3: Upload JSONL and submit batch job ────────────
+            try:
+                # Upload the JSONL file
+                jsonl_file = client.files.upload(
+                    file=jsonl_path,
+                    config=types.UploadFileConfig(
+                        display_name="batch_input.jsonl",
+                        mime_type="application/jsonl",
+                    ),
+                )
+                logger.debug("JSONL uploaded → %s", jsonl_file.name)
+    
+                # Clean up local JSONL temp file
+                os.unlink(jsonl_path)
+    
+                # Submit the batch job
+                batch_job = client.batches.create(
+                    model=config.active_model,
+                    src=jsonl_file.name,
+                    config=types.CreateBatchJobConfig(
+                        display_name="whatsapp_image_sort_batch",
+                    ),
+                )
+    
+                api_job_name = batch_job.name
+                logger.info("Batch job submitted: %s", api_job_name)
+    
+            except Exception as exc:
+                logger.error("Failed to submit batch job: %s", exc, exc_info=True)
+                # Revert all uploaded images to Pending
+                image_ids = [item["db_row"]["id"] for item in uploaded_files]
+                db.revert_to_pending(image_ids)
+                # Attempt to clean up File API uploads
+                _cleanup_file_api(client, [item["file_api_name"] for item in uploaded_files])
+                if os.path.exists(jsonl_path):
+                    os.unlink(jsonl_path)
+                return 0
+    
+            # ── Step 4: Record in DB and EXIT ────────────────────────
+            # Create batch job record
+            job_id = db.create_batch_job(api_job_name)
+    
+            # Mark all images as Processing with the batch job ID
+            image_ids = [item["db_row"]["id"] for item in uploaded_files]
+            db.mark_processing(image_ids, batch_job_id=job_id)
+    
+            # Store the file API names for later cleanup
+            # We store them as a JSON list in a local metadata file
+            _save_batch_metadata(job_id, uploaded_files)
+    
+            logger.info(
+                "╔══════════════════════════════════════════════════╗\n"
+                "║  Batch job submitted successfully!               ║\n"
+                "║  Job: %-42s ║\n"
+                "║  Images: %-39d ║\n"
+                "║                                                  ║\n"
+                "║  Run this script again to check job status.      ║\n"
+                "╚══════════════════════════════════════════════════╝",
+                api_job_name, len(uploaded_files),
+            )
+    
+            return 0  # No images processed yet — they're in the queue
 
-        # Clean up local JSONL temp file
-        os.unlink(jsonl_path)
-
-        # Submit the batch job
-        batch_job = client.batches.create(
-            model=config.active_model,
-            src=jsonl_file.name,
-            config=types.CreateBatchJobConfig(
-                display_name="whatsapp_image_sort_batch",
-            ),
-        )
-
-        api_job_name = batch_job.name
-        logger.info("Batch job submitted: %s", api_job_name)
-
+    except KeyboardInterrupt:
+        logger.warning("Upload interrupted by user (Ctrl+C). Cleaning up %d orphaned files...", len(uploaded_files))
+        
+        # We need a fallback cleanup logic here
+        file_names_to_delete = [item["file_api_name"] for item in uploaded_files]
+        if jsonl_file:
+            file_names_to_delete.append(jsonl_file.name)
+            
+        if file_names_to_delete:
+            _cleanup_file_api(client, file_names_to_delete)
+        
+        # Re-raise so main.py can catch it and print the session summary
+        raise
+        
     except Exception as exc:
         logger.error("Failed to submit batch job: %s", exc, exc_info=True)
-        # Revert all uploaded images to Pending
-        image_ids = [item["db_row"]["id"] for item in uploaded_files]
-        db.revert_to_pending(image_ids)
-        # Attempt to clean up File API uploads
-        _cleanup_file_api(client, [item["file_api_name"] for item in uploaded_files])
-        if os.path.exists(jsonl_path):
-            os.unlink(jsonl_path)
-        return 0
-
-    # ── Step 4: Record in DB and EXIT ────────────────────────
-    # Create batch job record
-    job_id = db.create_batch_job(api_job_name)
-
-    # Mark all images as Processing with the batch job ID
-    image_ids = [item["db_row"]["id"] for item in uploaded_files]
-    db.mark_processing(image_ids, batch_job_id=job_id)
-
-    # Store the file API names for later cleanup
-    # We store them as a JSON list in a local metadata file
-    _save_batch_metadata(job_id, uploaded_files)
-
-    logger.info(
-        "╔══════════════════════════════════════════════════╗\n"
-        "║  Batch job submitted successfully!               ║\n"
-        "║  Job: %-42s ║\n"
-        "║  Images: %-39d ║\n"
-        "║                                                  ║\n"
-        "║  Run this script again to check job status.      ║\n"
-        "╚══════════════════════════════════════════════════╝",
-        api_job_name, len(uploaded_files),
-    )
-
-    return 0  # No images processed yet — they're in the queue
+        # Attempt minimal cleanup on crash
+        file_names_to_delete = [item["file_api_name"] for item in uploaded_files]
+        if jsonl_file:
+            file_names_to_delete.append(jsonl_file.name)
+        if file_names_to_delete:
+            _cleanup_file_api(client, file_names_to_delete)
+        raise
 
 
 def _resume_batch_job(

@@ -62,6 +62,7 @@ Use SQLite (`state.db`) for state management to ensure seamless resumes and erro
 - **Table 1: `ImageQueue`** → `id` (PK), `file_path` (UNIQUE), `status` (Pending, Processing, Completed, Failed), `category` (Nullable), `retry_count`, `batch_job_id` (Nullable FK), `inserted_on` (UTC ISO auto), `updated_on` (UTC ISO auto-trigger).
 - **Table 2: `BatchJobs`** → `job_id` (PK), `api_job_name`, `status` (Running, Succeeded, Failed), `created_at` (UTC ISO), `updated_on` (UTC ISO auto-trigger).
 - **Table 3: `SessionStats`** → `session_id` (PK), `mode`, `images_processed`, `total_tokens`, `cost_local_currency`, `inserted_on` (UTC ISO auto).
+- **Table 4: `EstimationStats`** → `model_name` (PK), `total_images_measured`, `total_input_tokens`, `total_output_tokens`, `updated_on` (UTC ISO auto-trigger). Tracks self-calibrating token averages per model.
 
 All tables include audit columns (`inserted_on`, `updated_on`) with `updated_on` managed by SQLite `AFTER UPDATE` triggers.
 
@@ -101,7 +102,7 @@ This mode requires the script to operate in a "Submit, Exit, and Resume" lifecyc
 - **Phase 2 (Resume & Poll):**
   - Upon next launch, the script checks `BatchJobs` for `Running` jobs.
   - It polls the Gemini API. If still running, it notifies the user and exits.
-  - If `SUCCEEDED`: Download the output `.jsonl`. Parse results, move files, and mark as `Completed`.
+  - If `SUCCEEDED`: Download the output `.jsonl` (ensure to use `client.files.download(file=)` and decode the output from `bytes` to string!). Parse results, move files, and mark as `Completed`.
   - **Crucial Cleanup:** Make API calls to delete the temporary images from the Gemini File API to free up user quota.
   - **Batch Mismatch Edge Case:** Compare input IDs to output IDs. Any skipped images go back to `Pending`. If the whole Batch job `FAILED`, mark all associated images as `Pending`, increment their `retry_count`, and delete the File API uploads.
 
@@ -117,6 +118,7 @@ This mode requires the script to operate in a "Submit, Exit, and Resume" lifecyc
 ## 7. Logging & Audit
 
 - **Dual logging:** Rich console output (`INFO` level) for the user + detailed file logging (`DEBUG` level) for audit.
+- **Progress Bars:** Use `tqdm` for live, single-line progress updates (e.g., during File API uploads or chunk processing) to avoid flooding the terminal with repetitive logs.
 - **Per-run log file:** `logs/sorter_YYYYMMDD_HHMMSS.log` — one per run, never overwritten.
 - **Error log:** `error.log` (append mode) for quick triage of API errors.
 - Logs capture: config loaded, each image processed, API request/response metadata, file moves, errors, cost calculations.

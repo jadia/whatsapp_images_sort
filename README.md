@@ -6,7 +6,8 @@ AI-powered image categorization utility that uses the **Google Gemini API** to s
 
 - 📁 **Dual-mode processing** — Standard (synchronous) and Batch (async, 50% cheaper)
 - 🧠 **AI categorization** — Uses Gemini to classify images into configurable categories
-- 📊 **Cost tracking** — Pre-processing estimates and post-processing actual costs in local currency
+- 📊 **Cost tracking** — Pre-processing estimates (self-calibrating in SQLite) and post-processing actual costs in local currency
+- 📈 **Progress bars** — Clean, live single-line `tqdm` progress tracking
 - 💾 **Resume-safe** — SQLite state database ensures seamless restarts
 - 📅 **Smart date extraction** — Regex filename parsing + OS timestamp fallback
 - 🏷️ **EXIF restoration** — Optionally inject dates back into image metadata
@@ -127,6 +128,18 @@ Sorted/
 > ```
 
 > 💡 **State Recovery:** The SQLite database (`state.db`) tracks all progress. If processing is interrupted, simply re-run the script — it will resume from where it left off.
+
+## Good To Know: Gemini Storage Cleanup
+
+If your batch processing script is killed forcefully or crashes during Phase 1, it may leave behind temporary images in Google's cloud storage. These dangling files silently consume your Gemini File API storage quota (which is typically 20 GB).
+
+To safely inspect and clear out any dangling storage files, run the included manual cleanup utility:
+
+```bash
+python scripts/cleanup_gemini_storage.py
+```
+
+This will automatically securely authenticate using your `.env` API key, list precisely how many orphaned files exist and their total megabyte size, and prompt you before deleting them all to free up your Google Cloud quota.
 
 ## Testing
 

@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 
 from google import genai
 from google.genai import types
+from tqdm import tqdm
 
 from src.config_manager import AppConfig
 from src.cost_tracker import CostTracker
@@ -113,12 +114,16 @@ def run_standard_mode(
     total_batches = (pending + club_size - 1) // club_size if pending > 0 else 0
 
     # ── Main processing loop ─────────────────────────────────
+    
+    # Create the progress bar for the total pending images
+    pbar = tqdm(total=pending, desc="Processing Images", unit="img")
+    
     try:
         while True:
             # Fetch next batch of Pending images
             pending_batch = db.get_pending_batch(club_size)
             if not pending_batch:
-                logger.info("No more Pending images — Standard mode complete")
+                logger.debug("No more Pending images — Standard mode complete")
                 break
 
             batch_number += 1
@@ -135,6 +140,8 @@ def run_standard_mode(
                     "[DRY RUN] Would process %d images — skipping API call",
                     batch_size,
                 )
+                # Update the progress bar for the skipped batch
+                pbar.update(batch_size)
                 break
 
             # ── Step 1: Resize images and prepare labels ─────────
@@ -163,6 +170,8 @@ def run_standard_mode(
 
             if not images_data:
                 logger.warning("No images could be prepared in this batch — skipping")
+                # Update the progress bar for the skipped batch
+                pbar.update(batch_size)
                 continue
 
             # ── Step 2: Build prompt and content parts ───────────
@@ -196,6 +205,8 @@ def run_standard_mode(
                 # Revert all images in batch to Pending for retry
                 failed_ids = [image_map[lbl]["db_row"]["id"] for lbl in image_map]
                 db.revert_to_pending(failed_ids)
+                # Update the progress bar for the failed batch
+                pbar.update(batch_size)
 
                 if test_mode:
                     logger.info("--test-mode: stopping after 1 batch (API error)")
@@ -228,6 +239,8 @@ def run_standard_mode(
                 )
                 failed_ids = [image_map[lbl]["db_row"]["id"] for lbl in image_map]
                 db.revert_to_pending(failed_ids)
+                # Update the progress bar for the failed batch
+                pbar.update(batch_size)
 
                 if test_mode:
                     logger.info("--test-mode: stopping after 1 batch (parse error)")
@@ -290,6 +303,9 @@ def run_standard_mode(
                 "Batch %s complete: %d/%d processed, %d mismatched",
                 progress_str, batch_processed, actual_count, len(unmatched_labels),
             )
+            
+            # Update the progress bar
+            pbar.update(batch_size)
 
             # ── Test mode: exit after first batch ────────────────
             if test_mode:
@@ -300,6 +316,8 @@ def run_standard_mode(
         logger.warning("Processing interrupted by user during batch %s (Ctrl+C)", progress_str)
         # Revert the current batch's pending images if necessary
         # The finally block in main handles the rest
+    finally:
+        pbar.close()
 
-    logger.info("Standard mode finished: %d images processed total", total_processed)
-    return total_processed
+    logger.info("Standard mode finished: %d images processed total", session_processed)
+    return session_processed

@@ -2,7 +2,7 @@
 
 ## System Overview
 
-The WhatsApp Image Sorter is a config-driven CLI utility with two processing modes sharing a common infrastructure layer.
+This diagram illustrates the high-level orchestration of the application. The `main.py` entry point handles environment initialization (config, database) and pre-calculates costs using self-calibrating historical data, before routing execution to either the Standard or Batch processing engine based on the `api_mode`. Both engines rely heavily on the Shared Infrastructure layer to ensure state is cleanly tracked and resuming is seamless.
 
 ```mermaid
 graph TB
@@ -57,6 +57,8 @@ graph TB
 
 ## Standard Mode Sequence
 
+Standard mode is synchronous and optimized for immediate results. To minimize API round-trips, it groups images into "clubs" (e.g., 10 images at once) and interleaves the image bytes directly into a single massive multimodal prompt. If the API successfully processes all 10 images, they are moved. If the AI hallucinates and returns fewer results (a mismatch), the missing images are gracefully reverted to `Pending` status in the database to be safely retried in the next batch.
+
 ```mermaid
 sequenceDiagram
     participant User
@@ -95,6 +97,11 @@ sequenceDiagram
 ```
 
 ## Batch Mode Lifecycle
+
+Batch mode is fully asynchronous and significantly cheaper, designed for bulk processing. It operates in two lifecycle phases to allow the user to close the terminal while Google processes the data in the background.
+
+**Phase 1** uploads the raw, resized images to the Gemini File API and submits the manifest `.jsonl`.
+**Phase 2** (triggered on a subsequent run of the script) polls the job status. When successful, it pulls the results, categorizes the files, and crucially, executes a cleanup sweep of the File API to prevent exhausting the user's storage quota.
 
 ```mermaid
 sequenceDiagram
@@ -148,6 +155,12 @@ sequenceDiagram
 
 ## Database Schema
 
+The SQLite database (`state.db`) is the source of truth for the application's resilience. It uses WAL journal mode to support safe concurrent reads. 
+- `ImageQueue` tracks the atomic state of every single file.
+- `BatchJobs` manages the async lifecycle of Gemini API jobs.
+- `SessionStats` aggregates historical run data for auditing.
+- `EstimationStats` (not pictured) stores cumulative token usage per-model to self-calibrate future pre-run cost estimations.
+
 ```mermaid
 erDiagram
     ImageQueue {
@@ -176,6 +189,14 @@ erDiagram
         int total_tokens
         real cost_local_currency
         text inserted_on
+    }
+
+    EstimationStats {
+        text model_name PK
+        int total_images_measured
+        int total_input_tokens
+        int total_output_tokens
+        text updated_on
     }
 
     BatchJobs ||--o{ ImageQueue : "batch_job_id"
