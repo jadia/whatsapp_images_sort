@@ -426,8 +426,10 @@ def _handle_batch_success(
             dest_file_name = batch_job.dest.file_name if hasattr(batch_job.dest, "file_name") else None
 
             if dest_file_name:
-                # Download the output file content
+                # Download the output file content (returns bytes in the new SDK)
                 output_content = client.files.download(file=dest_file_name)
+                if isinstance(output_content, bytes):
+                    output_content = output_content.decode("utf-8")
 
                 # Parse each line of the JSONL output
                 for line in output_content.strip().split("\n"):
