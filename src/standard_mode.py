@@ -208,6 +208,7 @@ def run_standard_mode(
                 cost_result = cost_tracker.record_usage(
                     input_tokens=getattr(usage, "prompt_token_count", 0) or 0,
                     output_tokens=getattr(usage, "candidates_token_count", 0) or 0,
+                    images_in_request=actual_count,
                 )
                 logger.info("Batch %d cost: %s", batch_number, cost_result.format_display())
 

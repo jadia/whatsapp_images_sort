@@ -466,6 +466,9 @@ class Database:
         if images_in_session <= 0:
             return
         
+        # Fetch old stats for logging
+        old_stats = self.get_estimation_stats(model_name)
+        
         # Upsert: insert if model doesn't exist, otherwise add to existing tallies
         self.conn.execute(
             """
@@ -480,10 +483,28 @@ class Database:
             (model_name, images_in_session, input_tokens_in_session, output_tokens_in_session),
         )
         self.conn.commit()
-        logger.debug(
-            "Updated estimation stats [%s]: +%d images, +%d in_tokens, +%d out_tokens",
-            model_name, images_in_session, input_tokens_in_session, output_tokens_in_session,
-        )
+        
+        # Fetch new stats for logging
+        new_stats = self.get_estimation_stats(model_name)
+        if new_stats:
+            new_avg_in = new_stats["total_input_tokens"] / new_stats["total_images_measured"]
+            new_avg_out = new_stats["total_output_tokens"] / new_stats["total_images_measured"]
+            
+            if old_stats:
+                old_avg_in = old_stats["total_input_tokens"] / old_stats["total_images_measured"]
+                old_avg_out = old_stats["total_output_tokens"] / old_stats["total_images_measured"]
+                logger.info(
+                    "Cost estimates updated for %s:\n"
+                    "  Previous : %.1f in, %.1f out tokens/image\n"
+                    "  New      : %.1f in, %.1f out tokens/image",
+                    model_name, old_avg_in, old_avg_out, new_avg_in, new_avg_out
+                )
+            else:
+                logger.info(
+                    "Cost estimates initialized for %s:\n"
+                    "  New      : %.1f in, %.1f out tokens/image",
+                    model_name, new_avg_in, new_avg_out
+                )
 
     # ── Lifecycle ────────────────────────────────────────────
 

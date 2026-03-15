@@ -474,13 +474,14 @@ def _handle_batch_success(
                     except Exception as exc:
                         logger.error("Error processing batch result line: %s — %s", line[:100], exc)
 
-                # Record usage if available
-                if hasattr(response_body, "usage_metadata"):
-                    usage = response_body["usage_metadata"]
-                    cost_tracker.record_usage(
-                        input_tokens=usage.get("prompt_token_count", 0),
-                        output_tokens=usage.get("candidates_token_count", 0),
-                    )
+                    # Record usage if available (response_body is a dictionary)
+                    usage = response_body.get("usageMetadata") or response_body.get("usage_metadata")
+                    if usage:
+                        cost_tracker.record_usage(
+                            input_tokens=usage.get("promptTokenCount") or usage.get("prompt_token_count", 0),
+                            output_tokens=usage.get("candidatesTokenCount") or usage.get("candidates_token_count", 0),
+                            images_in_request=1,
+                        )
 
     except Exception as exc:
         logger.error("Failed to process batch results: %s", exc, exc_info=True)
