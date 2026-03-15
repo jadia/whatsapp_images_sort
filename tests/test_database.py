@@ -251,6 +251,7 @@ class TestSessionStats:
         test_db.record_session(
             session_id="test-uuid-123",
             mode="standard",
+            model="gemini-pro-test",
             images_processed=42,
             total_tokens=5000,
             cost_local_currency=1.23,
@@ -262,6 +263,61 @@ class TestSessionStats:
         )
         row = cursor.fetchone()
         assert row["mode"] == "standard"
+        assert row["model_name"] == "gemini-pro-test"
         assert row["images_processed"] == 42
         assert row["total_tokens"] == 5000
         assert row["inserted_on"] is not None
+
+
+class TestEstimationStats:
+    """Tests for EstimationStats upsert and model-specific tracking."""
+
+    def test_upsert_creates_new_row(self, test_db):
+        """First update for a model should create a new row."""
+        test_db.update_estimation_stats(
+            model_name="test-model",
+            images_in_session=10,
+            input_tokens_in_session=10000,
+            output_tokens_in_session=300,
+        )
+
+        stats = test_db.get_estimation_stats("test-model")
+        assert stats is not None
+        assert stats["total_images_measured"] == 10
+        assert stats["total_input_tokens"] == 10000
+        assert stats["total_output_tokens"] == 300
+
+    def test_upsert_accumulates(self, test_db):
+        """Second update for same model should ADD to existing totals."""
+        test_db.update_estimation_stats("test-model", 5, 5000, 150)
+        test_db.update_estimation_stats("test-model", 3, 3000, 90)
+
+        stats = test_db.get_estimation_stats("test-model")
+        assert stats["total_images_measured"] == 8
+        assert stats["total_input_tokens"] == 8000
+        assert stats["total_output_tokens"] == 240
+
+    def test_multi_model_isolation(self, test_db):
+        """Different models should maintain independent stats."""
+        test_db.update_estimation_stats("model-a", 10, 10000, 300)
+        test_db.update_estimation_stats("model-b", 5, 7500, 150)
+
+        stats_a = test_db.get_estimation_stats("model-a")
+        stats_b = test_db.get_estimation_stats("model-b")
+
+        assert stats_a["total_images_measured"] == 10
+        assert stats_b["total_images_measured"] == 5
+        assert stats_a["total_input_tokens"] == 10000
+        assert stats_b["total_input_tokens"] == 7500
+
+    def test_zero_images_skips_update(self, test_db):
+        """Updating with 0 images should be a no-op."""
+        test_db.update_estimation_stats("test-model", 0, 0, 0)
+        stats = test_db.get_estimation_stats("test-model")
+        assert stats is None
+
+    def test_get_nonexistent_model_returns_none(self, test_db):
+        """Querying a model with no stats should return None."""
+        stats = test_db.get_estimation_stats("nonexistent-model")
+        assert stats is None
+

@@ -8,6 +8,8 @@ AI-powered image categorization utility that uses the **Google Gemini API** to s
 - 🧠 **AI categorization** — Uses Gemini to classify images into configurable categories
 - 📊 **Cost tracking** — Pre-processing estimates (self-calibrating in SQLite) and post-processing actual costs in local currency
 - 📈 **Progress bars** — Clean, live single-line `tqdm` progress tracking
+- 🚀 **Parallel uploads** — `ThreadPoolExecutor` with configurable threads for batch mode uploads
+- 🔄 **Retry with back-off** — Automatic exponential back-off on API rate limits (429) and server errors
 - 💾 **Resume-safe** — SQLite state database ensures seamless restarts
 - 📅 **Smart date extraction** — Regex filename parsing + OS timestamp fallback
 - 🏷️ **EXIF restoration** — Optionally inject dates back into image metadata
@@ -20,7 +22,7 @@ AI-powered image categorization utility that uses the **Google Gemini API** to s
 ### 1. Clone and install
 
 ```bash
-git clone <repo-url>
+git clone git@github.com:jadia/whatsapp_images_sort.git
 cd whatsapp_images_sort
 pip install -r requirements.txt
 ```
@@ -36,6 +38,10 @@ cp .env.example .env
 Get your API key from [Google AI Studio](https://aistudio.google.com/apikey).
 
 ### 3. Configure
+
+```bash
+cp config.json.example config.json
+```
 
 Edit `config.json`:
 
@@ -76,6 +82,7 @@ python main.py
 | `active_model` | string | Gemini model name (must be in `pricing`) |
 | `batch_chunk_size` | int | Images per batch job (batch mode) |
 | `standard_club_size` | int | Images per API call (standard mode) |
+| `upload_threads` | int | Parallel upload threads for batch mode (1–50, default: 10) |
 | `source_dir` | string | Directory to scan for images |
 | `output_dir` | string | Root directory for sorted output |
 | `features.restore_exif_date` | bool | Inject date into EXIF metadata |
@@ -96,7 +103,7 @@ python main.py
 ```
 Sorted/
 ├── Documents & IDs/
-│   ├── 2024-01-15/
+│   ├── 2024/
 │   │   ├── IMG-20240115-WA0001.jpg
 │   │   └── ...
 │   └── Unknown_Date/
@@ -116,8 +123,10 @@ Sorted/
 
 ### Batch Mode
 - Cost-efficient (50% cheaper) but asynchronous.
-- **Phase 1:** Upload images, submit batch job, then **exit**.
-- **Phase 2:** Run the script again to poll results. If done, files are moved.
+- **Phase 1:** Pulls max `batch_chunk_size` images and uploads them in parallel (using `upload_threads`). This process loops automatically to submit *all* pending images as multiple independent batch jobs sequentially.
+- **Phase 2:** After submission (or if jobs are already running), automatically begins polling the Gemini API with a live, single-line countdown. When jobs succeed, files are moved.
+- All API calls have automatic retry with exponential back-off for rate limiting.
+- Pressing Ctrl+C during upload will clean up orphaned files from the Gemini File API.
 - Automatic cleanup of temporary File API uploads.
 
 ## Important Notes

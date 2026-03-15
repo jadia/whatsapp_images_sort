@@ -67,6 +67,7 @@ class AppConfig:
     active_model: str
     batch_chunk_size: int
     standard_club_size: int
+    upload_threads: int
     source_dir: str
     output_dir: str
     features: FeaturesConfig
@@ -221,6 +222,9 @@ def load_config(
     # 3j. numeric fields
     batch_chunk_size = int(raw.get("batch_chunk_size", 1000))
     standard_club_size = int(raw.get("standard_club_size", 10))
+    upload_threads = int(raw.get("upload_threads", 10))
+    if not (1 <= upload_threads <= 50):
+        _fail(f"'upload_threads' must be between 1 and 50, got: {upload_threads}")
 
     # ── Step 4: Build and return the frozen config ───────────
     config = AppConfig(
@@ -228,6 +232,7 @@ def load_config(
         active_model=active_model,
         batch_chunk_size=batch_chunk_size,
         standard_club_size=standard_club_size,
+        upload_threads=upload_threads,
         source_dir=os.path.abspath(source_dir),
         output_dir=os.path.abspath(output_dir),
         features=features,

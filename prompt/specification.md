@@ -30,6 +30,7 @@ The application is strictly driven by a `config.json` file.
   "active_model": "gemini-3-flash-lite",
   "batch_chunk_size": 1000,
   "standard_club_size": 10,
+  "upload_threads": 10,
   "source_dir": "/path/to/WhatsApp/Media",
   "output_dir": "/path/to/Sorted",
   "features": {
@@ -52,6 +53,18 @@ The application is strictly driven by a `config.json` file.
   ]
 }
 ```
+
+- **`upload_threads`** (default: `10`, range: `1–50`): Number of parallel threads for uploading images to the Gemini File API in batch mode. Higher values speed up Phase 1 submissions proportionally.
+
+---
+
+## 1b. Retry & Rate Limiting
+
+All API calls (uploads, deletions, `generate_content`, `batches.create`) are wrapped in `retry_with_backoff()` with:
+- **Max retries:** 3
+- **Back-off:** Exponential (1s → 2s → 4s) with random jitter, capped at 60s
+- **Retryable errors:** HTTP 429 (ResourceExhausted), 500, 503, 504, plus `ConnectionError`, `TimeoutError`, `OSError`
+- **Non-retryable errors:** `ValueError`, `TypeError`, `KeyboardInterrupt` — these propagate immediately
 
 ---
 
@@ -93,11 +106,13 @@ All tables include audit columns (`inserted_on`, `updated_on`) with `updated_on`
 This mode requires the script to operate in a "Submit, Exit, and Resume" lifecycle.
 
 - **Phase 1 (Submit):**
-  - Pull `batch_chunk_size` images. Resize them.
-  - Upload them to Google's temporary storage using the **Gemini File API** (`client.files.upload()`). Store the returned URIs.
-  - Create a `.jsonl` file mapping local file paths to File API URIs.
-  - Submit the Job to the Gemini Batch API (`client.batches.create()`).
-  - Save the `api_job_name` to the `BatchJobs` table, mark the images as `Processing` in `ImageQueue`, print a message to the user, and **EXIT the script**.
+  - Loop while there are images in the `Pending` queue:
+    - Pull up to `batch_chunk_size` images. Resize them.
+    - Upload them to Google's temporary storage using the **Gemini File API** (`client.files.upload()`). Store the returned URIs.
+    - Create a `.jsonl` file mapping local file paths to File API URIs.
+    - Submit the Job to the Gemini Batch API (`client.batches.create()`).
+    - Save the `api_job_name` to the `BatchJobs` table, mark the images as `Processing` in `ImageQueue`.
+  - Once the queue is fully submitted across multiple batch jobs, transition to Phase 2.
 
 - **Phase 2 (Resume & Poll):**
   - Upon next launch, the script checks `BatchJobs` for `Running` jobs.

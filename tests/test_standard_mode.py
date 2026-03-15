@@ -41,6 +41,7 @@ def std_env(tmp_path):
         active_model="gemini-3-flash-lite",
         batch_chunk_size=100,
         standard_club_size=3,
+        upload_threads=10,
         source_dir=str(source),
         output_dir=str(output),
         features=FeaturesConfig(restore_exif_date=False),

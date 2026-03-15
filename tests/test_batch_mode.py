@@ -49,6 +49,7 @@ def batch_env(tmp_path):
         active_model="gemini-3-flash-lite",
         batch_chunk_size=100,
         standard_club_size=3,
+        upload_threads=10,
         source_dir=str(source),
         output_dir=str(output),
         features=FeaturesConfig(restore_exif_date=False),
@@ -153,12 +154,31 @@ class TestBatchSubmit:
 
         assert processed == 0
 
+    @patch("src.batch_mode._submit_batch_job")
+    def test_multi_submit_loop(self, mock_submit, batch_env):
+        """Phase 1 should loop and submit batches until the queue is exhausted."""
+        # Setup: Mock _submit_batch_job to return True 3 times, then False.
+        # This simulates a queue that requires 3 batch jobs to empty.
+        mock_submit.side_effect = [True, True, True, False]
+        
+        # Mock get_running_batch_jobs to return empty for the Phase 2 check,
+        # so run_batch_mode simply returns 0 after Phase 1 finishes.
+        with patch.object(batch_env["db"], "get_running_batch_jobs", return_value=[]):
+            processed = run_batch_mode(
+                config=batch_env["config"],
+                db=batch_env["db"],
+                cost_tracker=batch_env["cost_tracker"],
+            )
+
+        assert processed == 0
+        assert mock_submit.call_count == 4
+
 
 class TestBatchResume:
     """Tests for Phase 2 (Resume & Poll)."""
 
-    def test_running_job_exits_gracefully(self, batch_env):
-        """Should notify user and exit if job is still running."""
+    def test_running_job_polls_until_keyboard_interrupt(self, batch_env):
+        """Should poll if job is running and exit gracefully on Ctrl+C."""
         db = batch_env["db"]
 
         # Simulate a running job in the database
@@ -166,8 +186,8 @@ class TestBatchResume:
         pending = db.get_pending_batch(5)
         db.mark_processing([r["id"] for r in pending], batch_job_id=job_id)
 
-        # Mock the Gemini client
-        with patch("src.batch_mode.genai") as mock_genai:
+        # Mock the Gemini client and time.sleep
+        with patch("src.batch_mode.genai") as mock_genai, patch("src.batch_mode.time.sleep", side_effect=KeyboardInterrupt):
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
 
@@ -176,13 +196,12 @@ class TestBatchResume:
             mock_batch.state.name = "JOB_STATE_RUNNING"
             mock_client.batches.get.return_value = mock_batch
 
-            processed = run_batch_mode(
-                config=batch_env["config"],
-                db=db,
-                cost_tracker=batch_env["cost_tracker"],
-            )
-
-        assert processed == 0
+            with pytest.raises(KeyboardInterrupt):
+                run_batch_mode(
+                    config=batch_env["config"],
+                    db=db,
+                    cost_tracker=batch_env["cost_tracker"],
+                )
         # Job should still be Running in DB
         running = db.get_running_batch_jobs()
         assert len(running) == 1
