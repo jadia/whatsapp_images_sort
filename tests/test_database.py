@@ -121,6 +121,20 @@ class TestImageQueue:
         assert row["status"] == STATUS_FAILED
         assert row["retry_count"] == 2
 
+    def test_mark_missing(self, test_db):
+        """Should mark an image as Missing."""
+        test_db.enqueue_images(["/img/missing.jpg"])
+        batch = test_db.get_pending_batch(1)
+        img_id = batch[0]["id"]
+        
+        # We need to import STATUS_MISSING or assert against the string directly
+        test_db.mark_missing(img_id)
+        
+        cursor = test_db.conn.execute(
+            "SELECT status FROM ImageQueue WHERE id = ?", (img_id,)
+        )
+        assert cursor.fetchone()["status"] == "Missing"
+
     def test_revert_to_pending(self, test_db):
         """Should revert images back to Pending."""
         test_db.enqueue_images(["/img/a.jpg", "/img/b.jpg"])
@@ -136,6 +150,34 @@ class TestImageQueue:
         test_db.revert_to_pending(ids)
         pending = test_db.get_pending_batch(10)
         assert len(pending) == 2
+
+    def test_truncate_queue(self, test_db):
+        """Should clear ImageQueue but preserve SessionStats."""
+        test_db.enqueue_images(["/img/x.jpg", "/img/y.jpg"])
+        test_db.record_session("sid_1", "standard", "gemini-1", 5, 100, 0.5)
+        
+        test_db.truncate_queue()
+        
+        assert test_db.get_total_count() == 0
+        
+        cursor = test_db.conn.execute("SELECT COUNT(*) FROM SessionStats")
+        assert cursor.fetchone()[0] == 1
+
+    def test_prune_missing_files(self, test_db):
+        """Should remove files from ImageQueue that are missing from the set of existing paths."""
+        test_db.enqueue_images(["/img/kept1.jpg", "/img/kept2.jpg", "/img/deleted.jpg"])
+        
+        existing = {"/img/kept1.jpg", "/img/kept2.jpg", "/img/new.jpg"}
+        deleted_count = test_db.prune_missing_files(existing)
+        
+        assert deleted_count == 1
+        assert test_db.get_total_count() == 2
+        
+        # Verify /img/deleted.jpg is gone
+        cursor = test_db.conn.execute("SELECT file_path FROM ImageQueue")
+        paths = {row["file_path"] for row in cursor.fetchall()}
+        assert "/img/deleted.jpg" not in paths
+        assert "/img/kept1.jpg" in paths
 
     def test_revert_to_pending_with_retry(self, test_db):
         """Should revert to Pending and increment retry_count."""

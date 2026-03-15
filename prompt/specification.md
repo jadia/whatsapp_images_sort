@@ -54,7 +54,7 @@ The application is strictly driven by a `config.json` file.
 }
 ```
 
-- **`upload_threads`** (default: `10`, range: `1–50`): Number of parallel threads for uploading images to the Gemini File API in batch mode. Higher values speed up Phase 1 submissions proportionally.
+- **`upload_threads`** (default: `40`, range: `1–100`): Number of parallel threads for uploading/deleting images to/from the Gemini File API. Higher values speed up Phase 1 submissions and Phase 2 cleanup proportionally.
 
 ---
 
@@ -72,7 +72,7 @@ All API calls (uploads, deletions, `generate_content`, `batches.create`) are wra
 
 Use SQLite (`state.db`) for state management to ensure seamless resumes and error recovery.
 
-- **Table 1: `ImageQueue`** → `id` (PK), `file_path` (UNIQUE), `status` (Pending, Processing, Completed, Failed), `category` (Nullable), `retry_count`, `batch_job_id` (Nullable FK), `inserted_on` (UTC ISO auto), `updated_on` (UTC ISO auto-trigger).
+- **Table 1: `ImageQueue`** → `id` (PK), `file_path` (UNIQUE), `status` (Pending, Processing, Completed, Failed, Missing), `category` (Nullable), `retry_count`, `batch_job_id` (Nullable FK), `inserted_on` (UTC ISO auto), `updated_on` (UTC ISO auto-trigger).
 - **Table 2: `BatchJobs`** → `job_id` (PK), `api_job_name`, `status` (Running, Succeeded, Failed), `created_at` (UTC ISO), `updated_on` (UTC ISO auto-trigger).
 - **Table 3: `SessionStats`** → `session_id` (PK), `mode`, `images_processed`, `total_tokens`, `cost_local_currency`, `inserted_on` (UTC ISO auto).
 - **Table 4: `EstimationStats`** → `model_name` (PK), `total_images_measured`, `total_input_tokens`, `total_output_tokens`, `updated_on` (UTC ISO auto-trigger). Tracks self-calibrating token averages per model.
@@ -86,6 +86,8 @@ All tables include audit columns (`inserted_on`, `updated_on`) with `updated_on`
 - **Resizing:** Before uploading to the API (in either mode), use `Pillow` to resize images locally to a maximum of 384×384 pixels to save tokens and bandwidth. Preserve aspect ratio. Do NOT modify the original file.
 - **Date Extraction (Regex):** Do NOT hardcode WhatsApp filename prefixes. Use Regex to search for `YYYYMMDD` in the filename. Validate month (01–12) and day (01–31).
 - **Date Edge Cases:** If no date is found in the filename, attempt to read the OS file modification time. If that also fails, route the file to `output_dir/Category/Unknown_Date/`.
+- **Missing Files Handling:** If `FileNotFoundError` or `PermissionError` occurs when attempting to read an image file block, do not crash. Safely catch the exception, mark that file explicitly as `Missing` in the SQLite datastore (so it is not infinitely retried), and proceed. 
+- **Auto-Pruning:** Immediately after scanning the source directory on startup, the application sweeps the `state.db` database and drops any rows referencing files that were manually moved or deleted from disk behind the tool's back.
 - **EXIF Restoration:** If `features.restore_exif_date` is `true`, inject the discovered date back into the image's EXIF metadata (using `piexif`) before saving it to the destination folder.
 
 ---
@@ -143,7 +145,8 @@ This mode requires the script to operate in a "Submit, Exit, and Resume" lifecyc
 ## 8. CLI Flags
 
 - `--test-mode` — Processes exactly one small batch and exits. Useful for validation.
-- `--dry-run` — Simulates the entire pipeline without calling the API or moving files. Prints useful stats: total images found, already processed count, to-be-processed count, estimated cost, categories list.
+- `--dry-run` — Simulates the entire pipeline without calling the API or moving files. Prints useful stats: total images found, already processed count, to-be-processed count, Missing files count, estimated cost, categories list.
+- `--prune-queue` — Cleans the database tracking by wiping out the `ImageQueue` table, starting tracking entirely fresh without having to wipe the overall statistical history of API usage.
 
 No `--source-dir` or `--output-dir` flags — directories come exclusively from `config.json`.
 

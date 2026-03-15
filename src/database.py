@@ -30,6 +30,7 @@ STATUS_PENDING = "Pending"
 STATUS_PROCESSING = "Processing"
 STATUS_COMPLETED = "Completed"
 STATUS_FAILED = "Failed"
+STATUS_MISSING = "Missing"
 
 BATCH_RUNNING = "Running"
 BATCH_SUCCEEDED = "Succeeded"
@@ -265,6 +266,66 @@ class Database:
         )
         self.conn.commit()
         logger.debug("Image %d marked as Failed", image_id)
+
+    def mark_missing(self, image_id: int) -> None:
+        """
+        Mark an image as Missing (file unreadable or deleted).
+        This status prevents retries.
+        """
+        self.conn.execute(
+            "UPDATE ImageQueue SET status = ? WHERE id = ?",
+            (STATUS_MISSING, image_id),
+        )
+        self.conn.commit()
+        logger.debug("Image %d marked as Missing", image_id)
+
+    def prune_missing_files(self, existing_paths: set) -> int:
+        """
+        Scan the DB for tracked images that no longer exist on disk,
+        and delete their database records to keep the DB lean.
+        
+        Args:
+            existing_paths: Set of absolute paths currently found on disk.
+            
+        Returns:
+            The number of DB rows deleted.
+        """
+        cursor = self.conn.execute("SELECT id, file_path FROM ImageQueue")
+        rows = cursor.fetchall()
+        
+        ids_to_delete = []
+        for row in rows:
+            if row["file_path"] not in existing_paths:
+                ids_to_delete.append(row["id"])
+                
+        if not ids_to_delete:
+            return 0
+            
+        # SQLite sets a limit on variables in IN clause (usually 999). Chunk it.
+        chunk_size = 900
+        deleted_count = 0
+        for i in range(0, len(ids_to_delete), chunk_size):
+            chunk = ids_to_delete[i:i + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            self.conn.execute(
+                f"DELETE FROM ImageQueue WHERE id IN ({placeholders})", chunk
+            )
+            deleted_count += len(chunk)
+            
+        self.conn.commit()
+        if deleted_count > 0:
+            logger.info("Pruned %d missing files from the database", deleted_count)
+            
+        return deleted_count
+
+    def truncate_queue(self) -> None:
+        """
+        Completely clear the ImageQueue table. 
+        Will not touch BatchJobs, SessionStats, or EstimationStats.
+        """
+        self.conn.execute("DELETE FROM ImageQueue")
+        self.conn.commit()
+        logger.warning("ImageQueue truncated successfully")
 
     def revert_to_pending(self, image_ids: List[int]) -> None:
         """
