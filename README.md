@@ -51,12 +51,16 @@ Edit `config.json`:
   "active_model": "gemini-3-flash-lite",
   "source_dir": "/path/to/your/WhatsApp/Media/Images",
   "output_dir": "/path/to/your/Sorted/Output",
+  "fallback_category": "Uncategorized_Review",
   "whatsapp_categories": [
-    "Documents & IDs",
-    "Financial & Receipts",
-    "People & Social",
-    "Memes & Junk",
-    "Scenery & Objects"
+    {
+      "name": "Documents & IDs",
+      "description": "Document-like or proof-like images"
+    },
+    {
+      "name": "People & Social",
+      "description": "Real personal photos of people"
+    }
   ]
 }
 ```
@@ -89,7 +93,8 @@ python main.py
 | `pricing.<model>` | object | `input_per_1m` and `output_per_1m` in USD |
 | `currency.symbol` | string | Local currency symbol |
 | `currency.usd_exchange_rate` | float | USD to local currency rate |
-| `whatsapp_categories` | list | Allowed category names |
+| `fallback_category` | string | Used when the AI is unsure (e.g., "Uncategorized_Review") |
+| `whatsapp_categories` | list | List of config objects with `name` and `description` |
 
 ## CLI Flags
 

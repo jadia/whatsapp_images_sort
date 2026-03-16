@@ -70,7 +70,7 @@ class TestConfigValidation:
             "pricing": {
                 "gemini-3-flash-lite": {"input_per_1m": 0.075, "output_per_1m": 0.30},
             },
-            "whatsapp_categories": ["Test Category"],
+            "whatsapp_categories": [{"name": "Test Category", "description": "A valid category"}],
         }
 
     def test_invalid_api_mode_exits(self, tmp_path):
@@ -102,6 +102,25 @@ class TestConfigValidation:
         with patch.dict(os.environ, {"GEMINI_API_KEY": "key"}):
             with pytest.raises(SystemExit):
                 load_config(config_path=path, env_path=None)
+
+    def test_invalid_category_format_exits(self, tmp_path):
+        """Categories that are not dicts or missing keys should sys.exit."""
+        scenarios = [
+            ["Just a string"],
+            [{"description": "missing name"}],
+            [{"name": "missing description"}],
+            [{"name": "", "description": "empty name"}],
+            [{"name": "empty desc", "description": "  "}],
+        ]
+
+        for invalid_categories in scenarios:
+            cfg = self._base_config(tmp_path)
+            cfg["whatsapp_categories"] = invalid_categories
+            path = self._write_config(tmp_path, cfg)
+
+            with patch.dict(os.environ, {"GEMINI_API_KEY": "key"}):
+                with pytest.raises(SystemExit):
+                    load_config(config_path=path, env_path=None)
 
     def test_missing_source_dir_exits(self, tmp_path):
         """Non-existent source_dir should sys.exit."""
@@ -196,9 +215,9 @@ class TestConfigValidation:
                 load_config(config_path=path, env_path=None)
 
     def test_upload_threads_above_max_exits(self, tmp_path):
-        """upload_threads=51 should sys.exit (above maximum 50)."""
+        """upload_threads=151 should sys.exit (above maximum 150)."""
         cfg = self._base_config(tmp_path)
-        cfg["upload_threads"] = 51
+        cfg["upload_threads"] = 151
         path = self._write_config(tmp_path, cfg)
 
         with patch.dict(os.environ, {"GEMINI_API_KEY": "key"}):

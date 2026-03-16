@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
-from src.config_manager import AppConfig, CurrencyConfig, FeaturesConfig, ModelPricing
+from src.config_manager import AppConfig, CurrencyConfig, FeaturesConfig, ModelPricing, CategoryDef
 from src.cost_tracker import CostTracker
 from src.database import Database, STATUS_COMPLETED, STATUS_PENDING
 from src.standard_mode import run_standard_mode
@@ -49,7 +49,12 @@ def std_env(tmp_path):
             "gemini-3-flash-lite": ModelPricing(input_per_1m=0.075, output_per_1m=0.30),
         },
         currency=CurrencyConfig(symbol="₹", usd_exchange_rate=83.50),
-        whatsapp_categories=["People & Social", "Memes & Junk"],
+        fallback_category="Uncategorized_Review",
+        global_rules=["Only pick one.", "Be smart."],
+        whatsapp_categories=[
+            CategoryDef(name="People & Social", description="Test desc"),
+            CategoryDef(name="Memes & Junk", description="Test desc"),
+        ],
         gemini_api_key="test-key",
     )
 

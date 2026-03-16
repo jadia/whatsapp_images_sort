@@ -181,7 +181,12 @@ def run_standard_mode(
 
             # ── Step 2: Build prompt and content parts ───────────
             actual_count = len(images_data)
-            prompt = build_standard_prompt(actual_count, config.whatsapp_categories)
+            prompt = build_standard_prompt(
+                actual_count,
+                config.whatsapp_categories,
+                config.fallback_category,
+                config.global_rules
+            )
             content_parts = _build_content_parts(prompt, images_data)
 
             # ── Step 3: Call the Gemini API ──────────────────────

@@ -21,8 +21,8 @@ if not API_KEY:
 
 client = genai.Client(api_key=API_KEY)
 
-THREAD_COUNTS = [10, 15, 25, 40, 50, 75, 100]
-FILES_PER_TEST = 100
+THREAD_COUNTS = [50, 75, 100]
+FILES_PER_TEST = 500
 
 def create_dummy_jpeg() -> bytes:
     img = Image.new("RGB", (100, 100), color="blue")

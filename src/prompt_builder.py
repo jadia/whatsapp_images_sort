@@ -20,10 +20,12 @@ import base64
 import logging
 from typing import Any, Dict, List, Tuple
 
+from src.config_manager import CategoryDef
+
 logger = logging.getLogger("whatsapp_sorter")
 
 
-def build_standard_prompt(num_images: int, categories: List[str]) -> str:
+def build_standard_prompt(num_images: int, categories: List[CategoryDef], fallback_category: str, global_rules: List[str]) -> str:
     """
     Build the system/instruction prompt for Standard mode.
 
@@ -37,26 +39,31 @@ def build_standard_prompt(num_images: int, categories: List[str]) -> str:
     Returns:
         The complete prompt string.
     """
-    # Format category list as a numbered list for clarity
-    category_list = "\n".join(f"  {i+1}. {cat}" for i, cat in enumerate(categories))
+    # Format category list as a numbered list with descriptions
+    category_list = "\n".join(f"  {i+1}. {cat.name}: {cat.description}" for i, cat in enumerate(categories))
+    valid_names = [cat.name for cat in categories] + [fallback_category]
+    rules_list = "\n".join(f"- {rule}" for rule in global_rules)
 
     prompt = f"""You are an expert image categorization assistant. You will be given exactly {num_images} image(s) labeled Image_1 through Image_{num_images}.
 
 For EACH image, classify it into exactly ONE of the following categories:
 {category_list}
 
-IMPORTANT RULES:
-- If an image does NOT clearly fit any of the above categories, you MUST classify it as "Uncategorized_Review".
+GLOBAL RULES:
+{rules_list}
+
+IMPORTANT CONSTRAINTS:
+- If an image does NOT clearly fit any of the above categories, you MUST classify it as "{fallback_category}".
 - You MUST return a valid JSON array with exactly {num_images} object(s).
 - Each object must have exactly two keys: "image" and "category".
 - The "image" value must match the label exactly (e.g., "Image_1").
-- The "category" value must be exactly one of the listed categories or "Uncategorized_Review".
+- The "category" value must be exactly one of the valid formats: {valid_names}.
 - Do NOT include any text outside the JSON array.
 
 Example output format for {num_images} image(s):
 [
-  {{"image": "Image_1", "category": "People & Social"}},
-  {{"image": "Image_2", "category": "Uncategorized_Review"}}
+  {{"image": "Image_1", "category": "{categories[0].name}"}},
+  {{"image": "Image_2", "category": "{fallback_category}"}}
 ]
 
 Return ONLY the JSON array. No explanations, no markdown formatting."""
@@ -107,7 +114,9 @@ def build_standard_parts(
 def build_batch_request(
     image_uri: str,
     image_label: str,
-    categories: List[str],
+    categories: List[CategoryDef],
+    fallback_category: str,
+    global_rules: List[str],
     model: str,
 ) -> Dict[str, Any]:
     """
@@ -119,19 +128,26 @@ def build_batch_request(
     Args:
         image_uri: The File API URI (e.g., "files/abc123").
         image_label: Label like "Image_1" for response matching.
-        categories: List of valid categories from config.
+        categories: List of valid CategoryDef objects.
+        fallback_category: The default category to use.
         model: The model name to use.
 
     Returns:
         Dict conforming to Gemini Batch API JSONL format with
         a custom 'key' field for matching responses to inputs.
     """
-    category_list = ", ".join(f'"{cat}"' for cat in categories)
+    category_list_text = "\\n".join(f"- {cat.name}: {cat.description}" for cat in categories)
+    valid_names = [cat.name for cat in categories] + [fallback_category]
+    rules_text = "\\n".join(f"- {rule}" for rule in global_rules)
 
     prompt_text = (
-        f'Classify this image into exactly ONE category from: [{category_list}]. '
-        f'If it does not fit any category, use "Uncategorized_Review". '
-        f'Return ONLY a JSON object: {{"image": "{image_label}", "category": "<chosen>"}}'
+        f"You are an expert image categorizer. Classify this image into exactly ONE category from:\\n"
+        f"{category_list_text}\\n\\n"
+        f"GLOBAL RULES:\\n"
+        f"{rules_text}\\n\\n"
+        f"If the image does not clearly fit, use '{fallback_category}'. "
+        f"Return ONLY a JSON object exactly like: {{\"image\": \"{image_label}\", \"category\": \"<chosen_category>\"}} "
+        f"where category is strictly one of: {valid_names}"
     )
 
     request = {

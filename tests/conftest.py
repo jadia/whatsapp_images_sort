@@ -21,7 +21,7 @@ from unittest.mock import patch
 import pytest
 from PIL import Image
 
-from src.config_manager import AppConfig, CurrencyConfig, FeaturesConfig, ModelPricing
+from src.config_manager import AppConfig, CategoryDef, CurrencyConfig, FeaturesConfig, ModelPricing
 from src.database import Database
 
 
@@ -60,7 +60,13 @@ def sample_config(tmp_dirs):
             "gemini-3-flash": ModelPricing(input_per_1m=0.35, output_per_1m=1.05),
         },
         currency=CurrencyConfig(symbol="₹", usd_exchange_rate=83.50),
-        whatsapp_categories=["Documents & IDs", "People & Social", "Memes & Junk"],
+        fallback_category="Uncategorized_Review",
+        global_rules=["Only pick one.", "Be smart."],
+        whatsapp_categories=[
+            CategoryDef(name="Documents & IDs", description="All kinds of docs"),
+            CategoryDef(name="People & Social", description="Photos of people"),
+            CategoryDef(name="Memes & Junk", description="Internet memes and forwards"),
+        ],
         gemini_api_key="test-fake-api-key-12345",
     )
 
@@ -141,7 +147,12 @@ def config_json_path(tmp_dirs, sample_config):
             "symbol": sample_config.currency.symbol,
             "usd_exchange_rate": sample_config.currency.usd_exchange_rate,
         },
-        "whatsapp_categories": sample_config.whatsapp_categories,
+        "fallback_category": sample_config.fallback_category,
+        "global_rules": sample_config.global_rules,
+        "whatsapp_categories": [
+            {"name": cat.name, "description": cat.description} 
+            for cat in sample_config.whatsapp_categories
+        ],
     }
 
     config_path = os.path.join(tmp_dirs["root"], "config.json")
