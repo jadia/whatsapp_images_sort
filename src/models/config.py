@@ -273,8 +273,9 @@ def load_config(
     # 3l. numeric fields
     batch_chunk_size = int(raw.get("batch_chunk_size", 1000))
     standard_club_size = int(raw.get("standard_club_size", 10))
-    upload_threads = int(raw.get("upload_threads", 25))
+    upload_threads = int(raw.get("upload_threads", 10))
     if not (1 <= upload_threads <= 150):
+
         _fail(f"'upload_threads' must be between 1 and 150, got: {upload_threads}")
 
     # ── Step 4: Build and return the frozen config ───────────

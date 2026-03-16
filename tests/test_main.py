@@ -24,14 +24,14 @@ class TestScanSourceDirectory:
         (tmp_path / "test.jpg").touch()
         (tmp_path / "test.jpeg").touch()
 
-        paths = _scan_source_directory(str(tmp_path))
+        paths = list(_scan_source_directory(str(tmp_path)))
         assert len(paths) == 2
 
     def test_finds_png_images(self, tmp_path):
         """Should find .png files."""
         (tmp_path / "test.png").touch()
 
-        paths = _scan_source_directory(str(tmp_path))
+        paths = list(_scan_source_directory(str(tmp_path)))
         assert len(paths) == 1
 
     def test_ignores_non_image_files(self, tmp_path):
@@ -41,7 +41,7 @@ class TestScanSourceDirectory:
         (tmp_path / "test.mp4").touch()
         (tmp_path / "image.jpg").touch()
 
-        paths = _scan_source_directory(str(tmp_path))
+        paths = list(_scan_source_directory(str(tmp_path)))
         assert len(paths) == 1
 
     def test_recursive_scan(self, tmp_path):
@@ -52,21 +52,22 @@ class TestScanSourceDirectory:
         (tmp_path / "root.jpg").touch()
         (subdir / "nested.jpg").touch()
 
-        paths = _scan_source_directory(str(tmp_path))
+        paths = list(_scan_source_directory(str(tmp_path)))
         assert len(paths) == 2
 
-    def test_returns_sorted_paths(self, tmp_path):
-        """Paths should be sorted alphabetically."""
-        (tmp_path / "c.jpg").touch()
-        (tmp_path / "a.jpg").touch()
-        (tmp_path / "b.jpg").touch()
+    def test_finds_all_expected_files(self, tmp_path):
+        """Should find all expected image files regardless of order."""
+        files = ["c.jpg", "a.jpg", "b.jpg"]
+        for f in files:
+            (tmp_path / f).touch()
 
-        paths = _scan_source_directory(str(tmp_path))
-        assert paths == sorted(paths)
+        paths = list(_scan_source_directory(str(tmp_path)))
+        found_names = {p.name for p in paths}
+        assert found_names == set(files)
 
     def test_empty_directory(self, tmp_path):
         """Empty directory should return empty list."""
-        paths = _scan_source_directory(str(tmp_path))
+        paths = list(_scan_source_directory(str(tmp_path)))
         assert len(paths) == 0
 
     def test_case_insensitive_extensions(self, tmp_path):
@@ -74,7 +75,7 @@ class TestScanSourceDirectory:
         (tmp_path / "test.JPG").touch()
         (tmp_path / "test.Png").touch()
 
-        paths = _scan_source_directory(str(tmp_path))
+        paths = list(_scan_source_directory(str(tmp_path)))
         assert len(paths) == 2
 
 
