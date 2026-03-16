@@ -10,12 +10,12 @@ import json
 
 import pytest
 
-from src.prompt_builder import (
+from src.core.prompt_builder import (
     build_batch_request,
     build_standard_parts,
     build_standard_prompt,
 )
-from src.config_manager import CategoryDef
+from src.models.config import CategoryDef
 
 def mock_cats(names: list[str]) -> list[CategoryDef]:
     return [CategoryDef(name=n, description=f"Desc of {n}") for n in names]

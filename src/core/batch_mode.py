@@ -40,18 +40,18 @@ from google import genai
 from google.genai import types
 from tqdm import tqdm
 
-from src.config_manager import AppConfig
-from src.cost_tracker import CostTracker
-from src.database import (
+from src.models.config import AppConfig
+from src.utils.cost_tracker import CostTracker
+from src.utils.database import (
     BATCH_FAILED,
     BATCH_RUNNING,
     BATCH_SUCCEEDED,
     Database,
 )
-from src.file_mover import move_image, move_to_unprocessable
-from src.image_utils import extract_date, resize_image
-from src.prompt_builder import build_batch_request
-from src.retry import retry_with_backoff
+from src.utils.file_mover import move_image, move_to_unprocessable
+from src.utils.image_utils import extract_date, resize_image
+from src.core.prompt_builder import build_batch_request
+from src.utils.retry import retry_with_backoff
 
 logger = logging.getLogger("whatsapp_sorter")
 
@@ -148,7 +148,7 @@ def _upload_single_image(
         on success, or None on failure.
     """
     # ── Step 0: Pre-flight checks (AppleDouble & Ignored Extensions) ──
-    file_path = row["file_path"]
+    file_path = row.file_path
     tmp_path = None
     original_filename = os.path.basename(file_path)
     
@@ -282,7 +282,7 @@ def _submit_batch_job(
             # Submit all upload tasks
             future_to_meta = {}
             for row in pending:
-                label = f"img_{row['id']}"
+                label = f"img_{row.id}"
                 future = executor.submit(
                     _upload_single_image, client, config, row, label,
                 )
@@ -296,17 +296,17 @@ def _submit_batch_job(
                     if result is not None:
                         if "error" in result:
                             if result["error"] == "Missing":
-                                missing_ids.append(row["id"])
+                                missing_ids.append(row.id)
                             elif result["error"] == "Failed":
-                                failed_ids.append(row["id"])
+                                failed_ids.append(row.id)
                         else:
                             with uploaded_lock:
                                 uploaded_files.append(result)
                     else:
-                        failed_ids.append(row["id"])
+                        failed_ids.append(row.id)
                 except Exception as exc:
                     logger.error("Unexpected error for %s: %s", label, exc)
-                    failed_ids.append(row["id"])
+                    failed_ids.append(row.id)
                 finally:
                     pbar.update(1)
 
@@ -384,7 +384,7 @@ def _submit_batch_job(
         except Exception as exc:
             logger.error("Failed to submit batch job: %s", exc, exc_info=True)
             # Revert all uploaded images to Pending
-            image_ids = [item["db_row"]["id"] for item in uploaded_files]
+            image_ids = [item["db_row"].id for item in uploaded_files]
             db.revert_to_pending(image_ids)
             # Attempt to clean up File API uploads
             _cleanup_file_api(
@@ -400,7 +400,7 @@ def _submit_batch_job(
         job_id = db.create_batch_job(api_job_name)
 
         # Mark all images as Processing with the batch job ID
-        image_ids = [item["db_row"]["id"] for item in uploaded_files]
+        image_ids = [item["db_row"].id for item in uploaded_files]
         db.mark_processing(image_ids, batch_job_id=job_id)
 
         # Store the file API names for later cleanup
@@ -456,8 +456,8 @@ def _resume_batch_job(
     Returns:
         Number of images successfully processed.
     """
-    job_id = job["job_id"]
-    api_job_name = job["api_job_name"]
+    job_id = job.job_id
+    api_job_name = job.api_job_name
 
     logger.info("Checking batch job: %s (DB id: %d)", api_job_name, job_id)
 
@@ -555,7 +555,7 @@ def _handle_batch_success(
         return 0
 
     # Build a lookup: label → image row
-    image_by_label: Dict[str, Dict] = {f"img_{img['id']}": img for img in images}
+    image_by_label: Dict[str, Dict] = {f"img_{img.id}": img for img in images}
 
     # ── Download and parse output ────────────────────────────
     processed = 0
@@ -599,16 +599,16 @@ def _handle_batch_success(
                         if key in image_by_label:
                             matched_labels.add(key)
                             row = image_by_label[key]
-                            date = extract_date(row["file_path"])
+                            date = extract_date(row.file_path)
 
                             move_image(
-                                src_path=row["file_path"],
+                                src_path=row.file_path,
                                 category=category,
                                 date=date,
                                 output_dir=config.output_dir,
                                 exif_restore=config.features.restore_exif_date,
                             )
-                            db.mark_completed(row["id"], category)
+                            db.mark_completed(row.id, category)
                             processed += 1
 
                     except Exception as exc:
@@ -633,7 +633,7 @@ def _handle_batch_success(
             "BATCH MISMATCH: %d/%d images missing from results — reverting to Pending",
             len(unmatched_labels), len(image_by_label),
         )
-        unmatched_ids = [image_by_label[lbl]["id"] for lbl in unmatched_labels]
+        unmatched_ids = [image_by_label[lbl].id for lbl in unmatched_labels]
         db.revert_to_pending(unmatched_ids)
 
     # ── Update batch job status ──────────────────────────────
@@ -673,7 +673,7 @@ def _handle_batch_failure(
     # Revert all associated images
     images = db.get_images_by_batch_job(job_id)
     if images:
-        image_ids = [img["id"] for img in images]
+        image_ids = [img.id for img in images]
         db.revert_to_pending_with_retry(image_ids)
 
     # Update batch job status
@@ -764,8 +764,7 @@ def _save_batch_metadata(job_id: int, uploaded_files: List[Dict]) -> None:
             "label": item["label"],
             "file_api_name": item["file_api_name"],
             "file_uri": item["file_uri"],
-            "file_path": item["db_row"]["file_path"],
-        }
+            "file_path": item["db_row"].file_path,        }
         for item in uploaded_files
     ]
 

@@ -17,7 +17,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-from src.config_manager import AppConfig, ModelPricing
+from src.models.config import AppConfig, ModelPricing
 
 logger = logging.getLogger("whatsapp_sorter")
 

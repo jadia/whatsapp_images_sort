@@ -13,7 +13,7 @@ from datetime import datetime
 import pytest
 from PIL import Image
 
-from src.file_mover import build_destination_path, move_image, _resolve_collision, _sanitise_dirname
+from src.utils.file_mover import build_destination_path, move_image, _resolve_collision, _sanitise_dirname
 
 
 

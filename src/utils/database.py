@@ -21,7 +21,9 @@ import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Self
+
+from src.models.datatypes import ImageRow, BatchJobRow
 
 logger = logging.getLogger("whatsapp_sorter")
 
@@ -147,6 +149,21 @@ class Database:
         self.conn.commit()
         logger.info("Database initialised: %s", db_path)
 
+    # ── LEARNING FOCUS: Context Manager Protocol ───────────────
+    def __enter__(self) -> Self:
+        """
+        Called when entering a 'with' block.
+        Ensures the connection is ready to use.
+        """
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """
+        Called when exiting a 'with' block.
+        Guarantees the connection is closed, even if an error occurred.
+        """
+        self.close()
+
     # ── ImageQueue Operations ────────────────────────────────
 
     def enqueue_images(self, file_paths: List[str]) -> int:
@@ -178,7 +195,7 @@ class Database:
         logger.info("Enqueued %d new images (skipped %d existing)", inserted, len(file_paths) - inserted)
         return inserted
 
-    def get_pending_batch(self, limit: int) -> List[Dict]:
+    def get_pending_batch(self, limit: int) -> List[ImageRow]:
         """
         Fetch up to `limit` Pending images from the queue.
 
@@ -188,18 +205,18 @@ class Database:
             limit: Maximum number of images to fetch.
 
         Returns:
-            List of dicts with keys: id, file_path, status,
-            retry_count.
+            List of ImageRow instances.
         """
         cursor = self.conn.execute(
-            "SELECT id, file_path, status, retry_count "
+            "SELECT id, file_path, status, retry_count, category, batch_job_id, inserted_on, updated_on "
             "FROM ImageQueue "
             "WHERE status = ? AND retry_count < 2 "
             "ORDER BY id ASC "
             "LIMIT ?",
             (STATUS_PENDING, limit),
         )
-        rows = [dict(row) for row in cursor.fetchall()]
+        # LEARNING FOCUS: Unpacking dictionaries into Dataclasses
+        rows = [ImageRow(**dict(row)) for row in cursor.fetchall()]
         logger.debug("Fetched %d pending images (limit=%d)", len(rows), limit)
         return rows
 
@@ -387,7 +404,7 @@ class Database:
         self.conn.commit()
         logger.info("Processed %d images for retry/failure", len(image_ids))
 
-    def get_images_by_batch_job(self, batch_job_id: int) -> List[Dict]:
+    def get_images_by_batch_job(self, batch_job_id: int) -> List[ImageRow]:
         """
         Get all images associated with a specific batch job.
 
@@ -395,15 +412,15 @@ class Database:
             batch_job_id: The BatchJobs.job_id.
 
         Returns:
-            List of image dicts.
+            List of ImageRow instances.
         """
         cursor = self.conn.execute(
-            "SELECT id, file_path, status, retry_count "
+            "SELECT id, file_path, status, retry_count, category, batch_job_id, inserted_on, updated_on "
             "FROM ImageQueue WHERE batch_job_id = ? "
             "ORDER BY id ASC",
             (batch_job_id,),
         )
-        return [dict(row) for row in cursor.fetchall()]
+        return [ImageRow(**dict(row)) for row in cursor.fetchall()]
 
     def get_queue_stats(self) -> Dict[str, int]:
         """
@@ -444,19 +461,19 @@ class Database:
         logger.info("Created batch job: id=%d, api_name=%s", job_id, api_job_name)
         return job_id
 
-    def get_running_batch_jobs(self) -> List[Dict]:
+    def get_running_batch_jobs(self) -> List[BatchJobRow]:
         """
         Fetch all batch jobs with status 'Running'.
 
         Returns:
-            List of batch job dicts.
+            List of BatchJobRow instances.
         """
         cursor = self.conn.execute(
-            "SELECT job_id, api_job_name, status, created_at "
+            "SELECT job_id, api_job_name, status, created_at, updated_on "
             "FROM BatchJobs WHERE status = ?",
             (BATCH_RUNNING,),
         )
-        return [dict(row) for row in cursor.fetchall()]
+        return [BatchJobRow(**dict(row)) for row in cursor.fetchall()]
 
     def update_batch_job_status(self, job_id: int, status: str) -> None:
         """

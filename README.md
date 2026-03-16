@@ -201,3 +201,14 @@ pytest tests/ -v --tb=short
 ## License
 
 MIT
+
+## 🧠 How it Works under the Hood
+
+WhatsApp Image Sorter is designed to be **bulletproof against interruptions**. You can `Ctrl+C` the script, lose your internet connection, or hit an API rate limit, and the tool will seamlessly resume exactly where it left off.
+
+1. **The SQLite State Machine**: When you start the script, it scans your target directory and logs every single image into a local database (`state.db`) as `Pending`.
+2. **Strict ID Mapping**: Every image is assigned a permanent Database ID. When we ask the AI to categorize an image, we tag the image with this ID (e.g., `img_14022`). When the AI responds, we use that ID to map the answer back to your local file, completely eliminating the risk of files getting sorted into the wrong folders.
+3. **Local Pre-Processing**: Before anything touches the internet, `Pillow` resizes your images to a maximum of 384x384 pixels in memory. This drastically reduces your API token usage and speeds up upload times by 90%.
+4. **Asynchronous Batching**: In Batch Mode, the app uploads your files to Google's temporary storage using 100 parallel threads. It hands Google a "Job", marks your local files as `Processing`, and goes to sleep. When you run the script later, it downloads the results, sorts your files, and cleans up Google's servers to save your quota.
+
+For a deeper dive into the system's execution paths and state management, check out [docs/architecture.md](docs/architecture.md) and [docs/project_flow.md](docs/project_flow.md).

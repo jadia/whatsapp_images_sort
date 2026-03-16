@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 ============================================================
 main.py — CLI Entry Point for WhatsApp Image Sorter
@@ -19,51 +21,38 @@ Lifecycle:
 """
 
 import argparse
-import glob
 import logging
-import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from pathlib import Path
+from typing import Iterator
 
 from tqdm import tqdm
 
-from src.config_manager import load_config
-from src.cost_tracker import CostTracker
-from src.database import Database
-from src.logger_setup import setup_logging
+from src.models.config import load_config
+from src.utils.cost_tracker import CostTracker
+from src.utils.database import Database
+from src.utils.logger_setup import setup_logging
 
 logger = logging.getLogger("whatsapp_sorter")
 
 # Supported image extensions (case-insensitive matching)
-IMAGE_EXTENSIONS = {
+IMAGE_EXTENSIONS = frozenset({
     ".jpg", ".jpeg", ".png", ".gif", ".bmp",
     ".webp", ".tiff", ".tif", ".heic", ".heif",
-}
+})
 
 
-def _scan_source_directory(source_dir: str) -> list[str]:
+def _scan_source_directory(source_dir: str | Path) -> Iterator[Path]:
     """
-    Recursively scan the source directory for image files.
-
-    Args:
-        source_dir: Absolute path to the source directory.
-
-    Returns:
-        Sorted list of absolute paths to image files.
+    Recursively scan the source directory using a Generator.
     """
-    logger.info("Scanning source directory: %s", source_dir)
-    image_paths = []
+    source_path = Path(source_dir)
+    logger.info("Scanning source directory: %s", source_path)
 
-    for root, _dirs, files in os.walk(source_dir):
-        for filename in files:
-            ext = os.path.splitext(filename)[1].lower()
-            if ext in IMAGE_EXTENSIONS:
-                image_paths.append(os.path.join(root, filename))
-
-    image_paths.sort()
-    logger.info("Found %d image files", len(image_paths))
-    return image_paths
+    for file_path in source_path.rglob("*"):
+        if file_path.is_file() and file_path.suffix.lower() in IMAGE_EXTENSIONS:
+            yield file_path
 
 
 def _print_banner() -> None:
@@ -86,9 +75,6 @@ def _print_dry_run_summary(
 ) -> None:
     """
     Print detailed dry-run summary and exit.
-
-    Shows: total images, queue state, estimated cost,
-    categories, and config highlights.
     """
     pending = queue_stats.get("Pending", 0)
     completed = queue_stats.get("Completed", 0)
@@ -118,8 +104,8 @@ def _print_dry_run_summary(
     print()
     print(f"  ── Categories ──")
     for i, cat in enumerate(config.whatsapp_categories, 1):
-        print(f"    {i}. {cat}")
-    print(f"    +  Uncategorized_Review (fallback)")
+        print(f"    {i}. {cat.name}")
+    print(f"    +  {config.fallback_category} (fallback)")
     print()
     print("  No API calls made. No files moved.")
     print("═══════════════════════════════════════════════════\n")
@@ -164,158 +150,152 @@ def main() -> None:
     try:
         config = load_config()
     except SystemExit:
-        # load_config calls sys.exit on validation failure
-        # The error message is already logged
         return
 
     # ── Step 3: Initialise database ──────────────────────────
-    db = Database()
-    logger.info("Database ready")
+    with Database() as db:
+        logger.info("Database ready")
 
-    if args.prune_queue:
-        db.truncate_queue()
-        print("\n  Image queue has been successfully cleared.\n")
-        db.close()
-        return
+        if args.prune_queue:
+            db.truncate_queue()
+            print("\n  Image queue has been successfully cleared.\n")
+            return
 
-    # ── Step 4: Scan source directory and enqueue new images ──
-    image_paths = _scan_source_directory(config.source_dir)
-    total_images = len(image_paths)
-    
-    # Prune Database: Remove DB rows for files that were deleted from disk
-    db.prune_missing_files(set(image_paths))
-
-    if total_images == 0:
-        logger.info("No image files found in %s — nothing to do", config.source_dir)
-        print(f"\n  No image files found in {config.source_dir}\n")
-        db.close()
-        return
-
-    # Enqueue with progress bar
-    new_count = 0
-    with tqdm(
-        total=total_images,
-        desc="Enqueuing images",
-        unit="img",
-        disable=False,
-    ) as pbar:
-        # Batch enqueue for efficiency
-        batch_size = 500
-        for i in range(0, total_images, batch_size):
-            batch = image_paths[i : i + batch_size]
-            inserted = db.enqueue_images(batch)
-            new_count += inserted
-            pbar.update(len(batch))
-
-    logger.info("Enqueue complete: %d new, %d total", new_count, total_images)
-
-    # ── Step 5: Show queue stats and cost estimate ───────────
-    queue_stats = db.get_queue_stats()
-    pending_count = queue_stats.get("Pending", 0)
-    completed_count = queue_stats.get("Completed", 0)
-
-    # Calibrate tracker with actual historical usage from DB for this specific model
-    if config.api_mode == "batch":
-        cost_tracker = CostTracker(config, discount_multiplier=0.5)
-    else:
-        cost_tracker = CostTracker(config)
+        # ── Step 4: Scan source directory and enqueue new images ──
+        # Consume the generator to sort and get the total count for tqdm
+        image_paths = sorted(list(_scan_source_directory(config.source_dir)))
+        total_images = len(image_paths)
         
-    cost_tracker.calibrate_from_db(db.get_estimation_stats(config.active_model))
+        # Prune Database: Remove DB rows for files that were deleted from disk
+        db.prune_missing_files({str(p) for p in image_paths})
 
-    if args.dry_run:
-        _print_dry_run_summary(
-            config=config,
-            total_images=total_images,
-            new_images=new_count,
-            queue_stats=queue_stats,
-            cost_tracker=cost_tracker,
-        )
-        db.close()
-        return
+        if total_images == 0:
+            logger.info("No image files found in %s — nothing to do", config.source_dir)
+            print(f"\n  No image files found in {config.source_dir}\n")
+            return
 
-    has_running_batch = False
-    if config.api_mode == "batch":
-        has_running_batch = len(db.get_running_batch_jobs()) > 0
+        # Enqueue with progress bar
+        new_count = 0
+        with tqdm(
+            total=total_images,
+            desc="Enqueuing images",
+            unit="img",
+            disable=False,
+        ) as pbar:
+            # Batch enqueue for efficiency
+            batch_size = 500
+            for i in range(0, total_images, batch_size):
+                batch = [str(p) for p in image_paths[i : i + batch_size]]
+                inserted = db.enqueue_images(batch)
+                new_count += inserted
+                pbar.update(len(batch))
 
-    # Show brief stats before processing
-    if pending_count == 0 and not has_running_batch:
-        logger.info("No pending images — all %d images already processed", completed_count)
-        print(f"\n  All {completed_count:,} images already processed. Nothing to do.\n")
-        db.close()
-        return
+        logger.info("Enqueue complete: %d new, %d total", new_count, total_images)
 
-    estimate = cost_tracker.estimate_cost(pending_count)
-    print(f"\n  Pending images: {pending_count:,}")
-    print(f"  Estimated cost: {estimate.format_display()}")
-    print()
+        # ── Step 5: Show queue stats and cost estimate ───────────
+        queue_stats = db.get_queue_stats()
+        pending_count = queue_stats.get("Pending", 0)
+        completed_count = queue_stats.get("Completed", 0)
 
-    # ── Step 6: Route to the appropriate mode ────────────────
-    session_id = str(uuid.uuid4())
-    logger.info("Session %s starting — mode=%s", session_id, config.api_mode)
-    
-    processed = 0
-    try:
-        if config.api_mode == "standard":
-            from src.standard_mode import run_standard_mode
-
-            processed = run_standard_mode(
-                config=config,
-                db=db,
-                cost_tracker=cost_tracker,
-                test_mode=args.test_mode,
-                dry_run=False,
-            )
-        elif config.api_mode == "batch":
-            from src.batch_mode import run_batch_mode
-
-            processed = run_batch_mode(
-                config=config,
-                db=db,
-                cost_tracker=cost_tracker,
-                test_mode=args.test_mode,
-                dry_run=False,
-            )
+        # Calibrate tracker with actual historical usage from DB for this specific model
+        if config.api_mode == "batch":
+            cost_tracker = CostTracker(config, discount_multiplier=0.5)
         else:
-            logger.error("Unknown api_mode: %s", config.api_mode)
-            processed = 0
+            cost_tracker = CostTracker(config)
+            
+        cost_tracker.calibrate_from_db(db.get_estimation_stats(config.active_model))
 
-    except KeyboardInterrupt:
-        logger.warning("Processing interrupted by user (Ctrl+C)")
-        # Do not reset processed: we want to record the images that WERE processed
-    except Exception as exc:
-        logger.error("Unhandled error during processing: %s", exc, exc_info=True)
+        if args.dry_run:
+            _print_dry_run_summary(
+                config=config,
+                total_images=total_images,
+                new_images=new_count,
+                queue_stats=queue_stats,
+                cost_tracker=cost_tracker,
+            )
+            return
 
-    # ── Step 7: Record session and print summary ─────────────
-    session_cost = cost_tracker.get_session_total()
-    db.record_session(
-        session_id=session_id,
-        mode=config.api_mode,
-        model=config.active_model,
-        images_processed=processed,
-        total_tokens=cost_tracker.total_tokens,
-        cost_local_currency=session_cost.cost_local,
-    )
+        has_running_batch = False
+        if config.api_mode == "batch":
+            has_running_batch = len(db.get_running_batch_jobs()) > 0
 
-    # Update global estimation stats with this session's actuals for this model
-    actuals = cost_tracker.get_estimation_actuals()
-    db.update_estimation_stats(config.active_model, *actuals)
+        # Show brief stats before processing
+        if pending_count == 0 and not has_running_batch:
+            logger.info("No pending images — all %d images already processed", completed_count)
+            print(f"\n  All {completed_count:,} images already processed. Nothing to do.\n")
+            return
 
-    # Final summary
-    print("\n═══ SESSION SUMMARY ═══════════════════════════════")
-    print(f"  Session ID : {session_id}")
-    print(f"  Mode       : {config.api_mode}")
-    print(f"  Model      : {config.active_model}")
-    print(f"  Processed  : {processed:,} images")
-    print(f"  Cost       : {session_cost.format_display()}")
+        estimate = cost_tracker.estimate_cost(pending_count)
+        print(f"\n  Pending images: {pending_count:,}")
+        print(f"  Estimated cost: {estimate.format_display()}")
+        print()
 
-    # Updated queue state
-    final_stats = db.get_queue_stats()
-    print(f"  Queue      : {final_stats}")
-    print("═══════════════════════════════════════════════════\n")
+        # ── Step 6: Route to the appropriate mode ────────────────
+        session_id = str(uuid.uuid4())
+        logger.info("Session %s starting — mode=%s", session_id, config.api_mode)
+        
+        processed = 0
+        try:
+            if config.api_mode == "standard":
+                from src.core.standard_mode import run_standard_mode
 
-    db.close()
-    logger.info("Session %s complete — %d images processed", session_id, processed)
+                processed = run_standard_mode(
+                    config=config,
+                    db=db,
+                    cost_tracker=cost_tracker,
+                    test_mode=args.test_mode,
+                    dry_run=False,
+                )
+            elif config.api_mode == "batch":
+                from src.core.batch_mode import run_batch_mode
+
+                processed = run_batch_mode(
+                    config=config,
+                    db=db,
+                    cost_tracker=cost_tracker,
+                    test_mode=args.test_mode,
+                    dry_run=False,
+                )
+            else:
+                logger.error("Unknown api_mode: %s", config.api_mode)
+                processed = 0
+
+        except KeyboardInterrupt:
+            logger.warning("Processing interrupted by user (Ctrl+C)")
+        except Exception as exc:
+            logger.error("Unhandled error during processing: %s", exc, exc_info=True)
+
+        # ── Step 7: Record session and print summary ─────────────
+        session_cost = cost_tracker.get_session_total()
+        db.record_session(
+            session_id=session_id,
+            mode=config.api_mode,
+            model=config.active_model,
+            images_processed=processed,
+            total_tokens=cost_tracker.total_tokens,
+            cost_local_currency=session_cost.cost_local,
+        )
+
+        # Update global estimation stats with this session's actuals for this model
+        actuals = cost_tracker.get_estimation_actuals()
+        db.update_estimation_stats(config.active_model, *actuals)
+
+        # Final summary
+        print("\n═══ SESSION SUMMARY ═══════════════════════════════")
+        print(f"  Session ID : {session_id}")
+        print(f"  Mode       : {config.api_mode}")
+        print(f"  Model      : {config.active_model}")
+        print(f"  Processed  : {processed:,} images")
+        print(f"  Cost       : {session_cost.format_display()}")
+
+        # Updated queue state
+        final_stats = db.get_queue_stats()
+        print(f"  Queue      : {final_stats}")
+        print("═══════════════════════════════════════════════════\n")
+
+        logger.info("Session %s complete — %d images processed", session_id, processed)
 
 
 if __name__ == "__main__":
     main()
+

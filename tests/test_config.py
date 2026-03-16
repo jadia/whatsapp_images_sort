@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.config_manager import load_config, AppConfig
+from src.models.config import load_config, AppConfig
 
 
 class TestConfigLoading:

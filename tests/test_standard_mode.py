@@ -13,10 +13,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
-from src.config_manager import AppConfig, CurrencyConfig, FeaturesConfig, ModelPricing, CategoryDef
-from src.cost_tracker import CostTracker
-from src.database import Database, STATUS_COMPLETED, STATUS_PENDING
-from src.standard_mode import run_standard_mode
+from src.models.config import AppConfig, CurrencyConfig, FeaturesConfig, ModelPricing, CategoryDef
+from src.utils.cost_tracker import CostTracker
+from src.utils.database import Database, STATUS_COMPLETED, STATUS_PENDING
+from src.core.standard_mode import run_standard_mode
 
 
 @pytest.fixture
@@ -91,7 +91,7 @@ def _mock_api_response(results_json, input_tokens=100, output_tokens=20):
 class TestStandardModeFullFlow:
     """Tests for complete standard mode processing."""
 
-    @patch("src.standard_mode.genai")
+    @patch("src.core.standard_mode.genai")
     def test_single_batch_processes_correctly(self, mock_genai, std_env):
         """Should process one batch of images and move them."""
         config = std_env["config"]
@@ -119,7 +119,7 @@ class TestStandardModeFullFlow:
         assert stats.get(STATUS_COMPLETED, 0) == 3
         assert stats.get(STATUS_PENDING, 0) == 2  # 5 total - 3 processed
 
-    @patch("src.standard_mode.genai")
+    @patch("src.core.standard_mode.genai")
     def test_mismatch_reverts_missing_images(self, mock_genai, std_env):
         """If AI returns fewer results, unmatched images revert to Pending."""
         config = std_env["config"]
@@ -148,7 +148,7 @@ class TestStandardModeFullFlow:
         assert stats.get(STATUS_COMPLETED, 0) == 2
         assert stats.get(STATUS_PENDING, 0) == 3
 
-    @patch("src.standard_mode.genai")
+    @patch("src.core.standard_mode.genai")
     def test_api_error_reverts_batch(self, mock_genai, std_env):
         """API failure should revert entire batch to Pending."""
         config = std_env["config"]
@@ -170,7 +170,7 @@ class TestStandardModeFullFlow:
         # 3 were attempted and reverted, 2 never touched = 5 still pending
         assert stats.get(STATUS_PENDING, 0) == 5
 
-    @patch("src.standard_mode.genai")
+    @patch("src.core.standard_mode.genai")
     def test_invalid_json_response_reverts_batch(self, mock_genai, std_env):
         """Invalid JSON response should revert the batch."""
         config = std_env["config"]
@@ -210,7 +210,7 @@ class TestStandardModeFullFlow:
         stats = db.get_queue_stats()
         assert stats.get(STATUS_PENDING, 0) == 5
 
-    @patch("src.standard_mode.genai")
+    @patch("src.core.standard_mode.genai")
     def test_files_moved_to_correct_directories(self, mock_genai, std_env):
         """Processed files should appear in output/Category/Date/ dirs."""
         config = std_env["config"]
@@ -245,7 +245,7 @@ class TestStandardModeFullFlow:
         # Complete all images manually
         pending = db.get_pending_batch(100)
         for row in pending:
-            db.mark_completed(row["id"], "Done")
+            db.mark_completed(row.id, "Done")
 
         processed = run_standard_mode(
             config=config,

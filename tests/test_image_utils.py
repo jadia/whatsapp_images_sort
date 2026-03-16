@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 from PIL import Image
 
-from src.image_utils import extract_date, resize_image, restore_exif_date
+from src.utils.image_utils import extract_date, resize_image, restore_exif_date
 
 
 class TestResizeImage:
