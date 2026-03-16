@@ -100,7 +100,7 @@ class TestBatchMetadata:
 
         uploaded = [
             {
-                "label": "Image_1",
+                "label": "img_42",
                 "file_api_name": "files/abc123",
                 "file_uri": "gs://bucket/abc123",
                 "db_row": {"file_path": "/img/test.jpg"},
@@ -112,7 +112,7 @@ class TestBatchMetadata:
 
         assert loaded is not None
         assert len(loaded) == 1
-        assert loaded[0]["label"] == "Image_1"
+        assert loaded[0]["label"] == "img_42"
         assert loaded[0]["file_api_name"] == "files/abc123"
 
         os.chdir(original_cwd)
@@ -319,26 +319,27 @@ class TestBatchResume:
 
         # Save metadata so the resume process knows about the files
         from src.batch_mode import _save_batch_metadata
+        id1, id2 = pending[0]["id"], pending[1]["id"]
         uploaded = [
-            {"label": "Image_1", "file_api_name": "files/a", "file_uri": "gs://a", "db_row": pending[0]},
-            {"label": "Image_2", "file_api_name": "files/b", "file_uri": "gs://b", "db_row": pending[1]},
+            {"label": f"img_{id1}", "file_api_name": "files/a", "file_uri": "gs://a", "db_row": pending[0]},
+            {"label": f"img_{id2}", "file_api_name": "files/b", "file_uri": "gs://b", "db_row": pending[1]},
         ]
         _save_batch_metadata(job_id, uploaded)
-
+    
         mock_client = MagicMock()
         mock_genai.Client.return_value = mock_client
-
+    
         mock_batch = MagicMock()
         mock_batch.state.name = "JOB_STATE_SUCCEEDED"
         mock_batch.dest = MagicMock()
         mock_batch.dest.file_name = "files/output_job.jsonl"
         mock_client.batches.get.return_value = mock_batch
-
+    
         # Mock download to provide a valid fake JSONL
         import json
         fake_jsonl = "\n".join([
-            json.dumps({"key": "Image_1", "response": {"candidates": [{"content": {"parts": [{"text": '```json\n{"image": "Image_1", "category": "Cat A"}\n```'}]}}]}}),
-            json.dumps({"key": "Image_2", "response": {"candidates": [{"content": {"parts": [{"text": '```json\n{"image": "Image_2", "category": "Cat B"}\n```'}]}}]}})
+            json.dumps({"key": f"img_{id1}", "response": {"candidates": [{"content": {"parts": [{"text": f'```json\n{{"image": "img_{id1}", "category": "Cat A"}}\n```'}]}}]}}),
+            json.dumps({"key": f"img_{id2}", "response": {"candidates": [{"content": {"parts": [{"text": f'```json\n{{"image": "img_{id2}", "category": "Cat B"}}\n```'}]}}]}})
         ])
         mock_client.files.download.return_value = fake_jsonl.encode("utf-8")
 
