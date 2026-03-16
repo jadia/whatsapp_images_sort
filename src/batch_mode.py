@@ -48,7 +48,7 @@ from src.database import (
     BATCH_SUCCEEDED,
     Database,
 )
-from src.file_mover import move_image
+from src.file_mover import move_image, move_to_unprocessable
 from src.image_utils import extract_date, resize_image
 from src.prompt_builder import build_batch_request
 from src.retry import retry_with_backoff
@@ -134,6 +134,7 @@ def run_batch_mode(
 
 def _upload_single_image(
     client: genai.Client,
+    config: AppConfig,
     row: Dict,
     label: str,
 ) -> Optional[Dict]:
@@ -146,8 +147,31 @@ def _upload_single_image(
         Dict with {label, file_api_name, file_uri, db_row, date}
         on success, or None on failure.
     """
+    # ── Step 0: Pre-flight checks (AppleDouble & Ignored Extensions) ──
     file_path = row["file_path"]
     tmp_path = None
+    original_filename = os.path.basename(file_path)
+    
+    if original_filename.startswith("._"):
+        logger.warning(
+            "Skipping AppleDouble metadata file %s: %s", label, file_path
+        )
+        try:
+            move_to_unprocessable(file_path, config.output_dir)
+        except OSError as e:
+            logger.debug("Failed to quarantine AppleDouble file: %s", e)
+        return {"error": "Failed", "db_row": row}
+        
+    _, ext = os.path.splitext(original_filename)
+    if ext.lower() in config.ignored_extensions:
+        logger.warning(
+            "Skipping explicitly ignored extension %s: %s", label, file_path
+        )
+        try:
+            move_to_unprocessable(file_path, config.output_dir)
+        except OSError as e:
+            logger.debug("Failed to quarantine ignored file: %s", e)
+        return {"error": "Failed", "db_row": row}
 
     try:
         # Resize the image
@@ -185,19 +209,24 @@ def _upload_single_image(
         }
 
     except (FileNotFoundError, PermissionError) as exc:
-        logger.warning("File missing or unreadable, skipping %s: %s", file_path, exc)
+        logger.warning("File missing or unreadable, skipping %s: %s", label, exc)
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
         return {"error": "Missing", "db_row": row}
 
     except Exception as exc:
-        # Some generic exception (API error, PIL error, etc)
-        # If it's a PIL error, consider adding PIL.UnidentifiedImageError to the tuple above.
+        # Catch PIL exceptions (UnidentifiedImageError, DecompressionBombError, etc)
         logger.error("Failed to prepare/upload %s (%s): %s", label, file_path, exc)
-        # Clean up temp file if it exists
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
-        return None
+            
+        # Move broken files to quarantine
+        try:
+            move_to_unprocessable(file_path, config.output_dir)
+        except OSError as e:
+            logger.debug("Failed to cascade quarantine file: %s", e)
+            
+        return {"error": "Failed", "db_row": row}
 
 
 # ── Phase 1: Submit ──────────────────────────────────────────
@@ -255,7 +284,7 @@ def _submit_batch_job(
             for i, row in enumerate(pending, start=1):
                 label = f"Image_{i}"
                 future = executor.submit(
-                    _upload_single_image, client, row, label,
+                    _upload_single_image, client, config, row, label,
                 )
                 future_to_meta[future] = (label, row)
 
@@ -265,8 +294,11 @@ def _submit_batch_job(
                 try:
                     result = future.result()
                     if result is not None:
-                        if "error" in result and result["error"] == "Missing":
-                            missing_ids.append(row["id"])
+                        if "error" in result:
+                            if result["error"] == "Missing":
+                                missing_ids.append(row["id"])
+                            elif result["error"] == "Failed":
+                                failed_ids.append(row["id"])
                         else:
                             with uploaded_lock:
                                 uploaded_files.append(result)

@@ -120,6 +120,37 @@ def move_image(
     return dest_path
 
 
+def move_to_unprocessable(src_path: str, output_dir: str) -> str:
+    """
+    Quarantine a file that cannot be processed into a dedicated Unprocessable folder.
+    
+    Copies the original file (like regular processing) to keep the source 
+    directory intact, but routes it to:
+    output_dir/Unprocessable_Files/filename.ext
+    
+    Args:
+        src_path: Absolute path to the original source file.
+        output_dir: Root output directory from config.
+        
+    Returns:
+        Absolute path to the destination file.
+    """
+    original_filename = os.path.basename(src_path)
+    dest_path = os.path.join(output_dir, "Unprocessable_Files", original_filename)
+    
+    # Handle filename collision
+    dest_path = _resolve_collision(dest_path)
+    
+    # Create the directory if needed
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    
+    # Copy the file to quarantine
+    shutil.copy2(src_path, dest_path)
+    logger.debug("Quarantined unprocessable file: %s → %s", src_path, dest_path)
+    
+    return dest_path
+
+
 def _sanitise_dirname(name: str) -> str:
     """
     Make a category name safe for use as a directory name.

@@ -63,7 +63,7 @@ The application is strictly driven by a `config.json` file.
 }
 ```
 
-- **`upload_threads`** (default: `40`, range: `1–100`): Number of parallel threads for uploading/deleting images to/from the Gemini File API. Higher values speed up Phase 1 submissions and Phase 2 cleanup proportionally.
+- **`upload_threads`** (default: `50`, range: `1–150`): Number of parallel threads for uploading/deleting images to/from the Gemini File API. Higher values speed up Phase 1 submissions and Phase 2 cleanup proportionally.
 
 ---
 
@@ -103,12 +103,12 @@ All tables include audit columns (`inserted_on`, `updated_on`) with `updated_on`
 
 ## 4. Standard API Mode (Synchronous)
 
-- **Clubbing Logic:** Pull up to `standard_club_size` (e.g., 10) `Pending` images from the DB.
+- **Clubbing Logic:** Pull up to `standard_club_size` (e.g., 250) `Pending` images from the DB.
 - **Payload Generation:** Interleave text (`Image_1:`, `Image_2:`) with base64 image data in the Gemini `parts` array.
 - **Dynamic Prompting:** The text prompt must dynamically state the exact number of images in the batch (to handle the final batch which might have fewer than 10 images). Enforces the configured `fallback_category` as the fallback classification.
-- **Processing:** Call the API. Parse the JSON. Move the files. Update the DB to `Completed`.
+- **Processing:** Call the API synchronously via a background daemon thread (so the main thread can render an indeterminate live `tqdm` timer without freezing). Parse the JSON. Move the files. Update the DB to `Completed`.
 - **Mismatch Edge Case:** If the AI returns 9 JSON objects for 10 images, move the 9 successful ones. Revert the missing 1 image in the SQLite DB back to `Pending` so it is picked up in the next run.
-- **Error Handling:** All API calls wrapped in `try/except`. Errors logged to audit log file and `error.log`.
+- **Error Handling:** All API calls wrapped in `try/except`. Errors logged to audit log file and `error.log`. KeyboardInterrupt instantly abandons the daemon thread.
 
 ---
 
@@ -117,6 +117,7 @@ All tables include audit columns (`inserted_on`, `updated_on`) with `updated_on`
 This mode requires the script to operate in a "Submit, Exit, and Resume" lifecycle.
 
 - **Phase 1 (Submit):**
+  - Updates the `CostTracker` instance natively with a **50% discount modifier** before applying calculations.
   - Loop while there are images in the `Pending` queue:
     - Pull up to `batch_chunk_size` images. Resize them.
     - Upload them to Google's temporary storage using the **Gemini File API** (`client.files.upload()`). Store the returned URIs.
@@ -126,9 +127,9 @@ This mode requires the script to operate in a "Submit, Exit, and Resume" lifecyc
   - Once the queue is fully submitted across multiple batch jobs, transition to Phase 2.
 
 - **Phase 2 (Resume & Poll):**
-  - Upon next launch, the script checks `BatchJobs` for `Running` jobs.
-  - It polls the Gemini API. If still running, it notifies the user and exits.
-  - If `SUCCEEDED`: Download the output `.jsonl` (ensure to use `client.files.download(file=)` and decode the output from `bytes` to string!). Parse results, move files, and mark as `Completed`.
+  - **Upon next launch**, the script MUST execute Phase 2 before Phase 1. It checks `BatchJobs` for `Running` jobs.
+  - It polls the Gemini API. If still running, it notifies the user and exits (preventing API thrashing or double-submissions).
+  - If `SUCCEEDED`: Download the output `.jsonl` (using `client.files.download(file=)`), parse results, move files, and mark as `Completed`.
   - **Crucial Cleanup:** Make API calls to delete the temporary images from the Gemini File API to free up user quota.
   - **Batch Mismatch Edge Case:** Compare input IDs to output IDs. Any skipped images go back to `Pending`. If the whole Batch job `FAILED`, mark all associated images as `Pending`, increment their `retry_count`, and delete the File API uploads.
 

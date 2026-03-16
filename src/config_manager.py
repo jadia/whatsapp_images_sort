@@ -82,6 +82,7 @@ class AppConfig:
     currency: CurrencyConfig
     fallback_category: str
     global_rules: List[str]
+    ignored_extensions: List[str]
     whatsapp_categories: List[CategoryDef]
     gemini_api_key: str
 
@@ -162,6 +163,20 @@ def load_config(
         _fail("'global_rules' must be a list of strings if provided.")
     
     global_rules = [str(r).strip() for r in global_rules_raw if str(r).strip()]
+
+    # 3x. ignored_extensions
+    ignored_raw = raw.get("ignored_extensions", [])
+    if not isinstance(ignored_raw, list):
+        _fail("'ignored_extensions' must be a list of strings if provided.")
+        
+    # Normalize to lowercase strings starting with '.'
+    ignored_extensions = []
+    for ext in ignored_raw:
+        ext_str = str(ext).strip().lower()
+        if ext_str:
+            if not ext_str.startswith("."):
+                ext_str = "." + ext_str
+            ignored_extensions.append(ext_str)
 
     # 3d. whatsapp_categories
     categories_raw = raw.get("whatsapp_categories", [])
@@ -276,6 +291,7 @@ def load_config(
         currency=currency,
         fallback_category=fallback_category,
         global_rules=global_rules,
+        ignored_extensions=ignored_extensions,
         whatsapp_categories=categories,
         gemini_api_key=gemini_api_key,
     )

@@ -194,7 +194,7 @@ class Database:
         cursor = self.conn.execute(
             "SELECT id, file_path, status, retry_count "
             "FROM ImageQueue "
-            "WHERE status = ? "
+            "WHERE status = ? AND retry_count < 2 "
             "ORDER BY id ASC "
             "LIMIT ?",
             (STATUS_PENDING, limit),
@@ -351,6 +351,7 @@ class Database:
     def revert_to_pending_with_retry(self, image_ids: List[int]) -> None:
         """
         Revert images to Pending AND increment their retry_count.
+        If retry_count reaches 2, marks them as Failed instead.
 
         Used when a batch job fails entirely.
 
@@ -359,15 +360,32 @@ class Database:
         """
         if not image_ids:
             return
+            
         placeholders = ",".join("?" * len(image_ids))
+        
+        # 1. Increment retry counts
         self.conn.execute(
-            f"UPDATE ImageQueue SET status = ?, batch_job_id = NULL, "
-            f"retry_count = retry_count + 1 "
+            f"UPDATE ImageQueue SET retry_count = retry_count + 1 "
             f"WHERE id IN ({placeholders})",
+            image_ids,
+        )
+        
+        # 2. Revert those whose count is < 2
+        self.conn.execute(
+            f"UPDATE ImageQueue SET status = ?, batch_job_id = NULL "
+            f"WHERE id IN ({placeholders}) AND retry_count < 2",
             [STATUS_PENDING] + image_ids,
         )
+        
+        # 3. Mark the rest as Failed
+        self.conn.execute(
+            f"UPDATE ImageQueue SET status = ?, batch_job_id = NULL "
+            f"WHERE id IN ({placeholders}) AND retry_count >= 2",
+            [STATUS_FAILED] + image_ids,
+        )
+
         self.conn.commit()
-        logger.info("Reverted %d images to Pending (retry incremented)", len(image_ids))
+        logger.info("Processed %d images for retry/failure", len(image_ids))
 
     def get_images_by_batch_job(self, batch_job_id: int) -> List[Dict]:
         """
