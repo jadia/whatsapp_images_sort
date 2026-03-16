@@ -399,7 +399,8 @@ class Database:
         """
         cursor = self.conn.execute(
             "SELECT id, file_path, status, retry_count "
-            "FROM ImageQueue WHERE batch_job_id = ?",
+            "FROM ImageQueue WHERE batch_job_id = ? "
+            "ORDER BY id ASC",
             (batch_job_id,),
         )
         return [dict(row) for row in cursor.fetchall()]

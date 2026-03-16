@@ -281,8 +281,8 @@ def _submit_batch_job(
         with ThreadPoolExecutor(max_workers=config.upload_threads) as executor:
             # Submit all upload tasks
             future_to_meta = {}
-            for i, row in enumerate(pending, start=1):
-                label = f"Image_{i}"
+            for row in pending:
+                label = f"img_{row['id']}"
                 future = executor.submit(
                     _upload_single_image, client, config, row, label,
                 )
@@ -555,10 +555,7 @@ def _handle_batch_success(
         return 0
 
     # Build a lookup: label → image row
-    image_by_label: Dict[str, Dict] = {}
-    for i, img in enumerate(images, start=1):
-        label = f"Image_{i}"
-        image_by_label[label] = img
+    image_by_label: Dict[str, Dict] = {f"img_{img['id']}": img for img in images}
 
     # ── Download and parse output ────────────────────────────
     processed = 0
