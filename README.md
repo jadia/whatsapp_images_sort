@@ -4,13 +4,13 @@ AI-powered image categorization utility that uses the **Google Gemini API** to s
 
 ## Features
 
-- 📁 **Dual-mode processing** — Standard (synchronous) and Batch (async, 50% cheaper)
-- 🧠 **AI categorization** — Uses Gemini to classify images into configurable categories
-- 📊 **Cost tracking** — Pre-processing estimates (self-calibrating in SQLite) and post-processing actual costs in local currency
-- 📈 **Progress bars** — Clean, live single-line `tqdm` progress tracking
-- 🚀 **Parallel uploads** — `ThreadPoolExecutor` with configurable threads for batch mode uploads
-- 🔄 **Retry with back-off** — Automatic exponential back-off on API rate limits (429) and server errors
-- 💾 **Resume-safe** — SQLite state database ensures seamless restarts with auto-pruning for tracking file deletions manually
+- 📁 **Dual-mode processing** — Standard (instant synchronous processing) and Batch (async queue, **50% offline discount**). Designed explicitly for the Google Gemini API.
+- 🧠 **AI categorization** — Uses Gemini's natively multimodal vision to classify images into configurable categories.
+- 📊 **Cost tracking** — Pre-processing estimates (self-calibrating in SQLite) and post-processing actual costs in local currency, natively accounting for the Batch 50% discount.
+- 📈 **Progress bars** — Clean, live single-line `tqdm` progress tracking with dynamic API ETA spinners.
+- 🚀 **Performance Architecture** — Blitz through massive backlogs! Native `ThreadPoolExecutor` leverages Google's File API to concurrently upload up to **100 threads at once**.
+- 🔄 **Retry with back-off** — Automatic exponential back-off on API rate limits (429) and server errors.
+- 💾 **Resume-safe** — SQLite state database ensures seamless restarts with auto-pruning.
 - 📅 **Smart date extraction** — Regex filename parsing + OS timestamp fallback
 - 🏷️ **EXIF restoration** — Optionally inject dates back into image metadata
 - 📝 **Extensive logging** — Per-run audit logs + error-specific log file
@@ -120,20 +120,49 @@ Sorted/
 └── Uncategorized_Review/
 ```
 
-## Modes
+## Why WhatsApp?
+
+This project was built primarily to sort WhatsApp media. WhatsApp automatically receives immense amounts of "junk" daily: forwarded morning quotes, receipts, ID cards, memes, and random screenshots. 
+
+Because WhatsApp aggressively compresses images, the file sizes are exceptionally small and API-friendly to upload. Furthermore, WhatsApp filenames follow a predictable date structure (`IMG-20240115-WA0001.jpg`), making them perfect for auto-sorting into nested `Category/Year` folders once AI evaluates them.
+
+*(Note: This application **only** supports Google Gemini. It utilizes the official Google Generative AI SDK, maximizing cost-effectiveness by leveraging Google's extremely generous async Batch API discounts.)*
+
+## Standard vs. Batch Mode
+
+Choosing the right mode in `config.json` depends entirely on your queue size and patience:
+
+| Feature | Standard Mode | Batch Mode |
+|---------|---------------|------------|
+| **Best For** | Small runs (< 50 images) | Massive backlogs (1,000+ images) |
+| **Speed** | Instant / Synchronous | Asynchronous (Delay of 15+ mins) |
+| **Cost** | Full API Price | **50% Discount** |
+| **Data Sent** | Inline Base64 Data | Concurrent File API Uploads |
 
 ### Standard Mode
-- Processes images synchronously in batches of `standard_club_size`.
-- Sends multiple images per API call for efficiency.
-- Handles mismatches: if AI returns fewer results, missing images are re-queued.
+- Processes short batches synchronously.
+- Instantly returns results. 
+- You pay the full API token price.
 
-### Batch Mode
-- Cost-efficient (50% cheaper) but asynchronous.
-- **Phase 1:** Pulls max `batch_chunk_size` images and uploads them in parallel (using `upload_threads`). This process loops automatically to submit *all* pending images as multiple independent batch jobs sequentially.
-- **Phase 2:** After submission (or if jobs are already running), automatically begins polling the Gemini API with a live, single-line countdown. When jobs succeed, files are moved.
-- All API calls have automatic retry with exponential back-off for rate limiting.
-- Pressing Ctrl+C during upload will clean up orphaned files from the Gemini File API.
-- Automatic cleanup of temporary File API uploads.
+### Batch Mode (Recommended for Backlogs)
+- Cost-efficient (**50% cheaper**).
+- **Phase 1 (Submit):** Parses thousands of images and leverages up to **100 concurrent threads** to upload images straight into the Google Cloud File API at lightning speed.
+- **Phase 2 (Poll):** Instead of keeping a synchronous connection open, the application steps back and automatically polls Google until their servers have processed your entire backlog.
+- Automatic cleanup of File API uploads when completed or cancelled.
+
+## Realistic Cost Analysis (gemini-3.1-flash-lite)
+
+Using Gemini's Batch API makes classifying thousands of images impressively cheap. 
+
+The costs shown below are projections modeled using **real token usage averages** pulled from this app's SQLite tracking history (averaging **1,187 input tokens** and **19 output tokens** per 384x384 image footprint):
+
+| Queue Size | Projected Tokens | Standard Cost | Batch Cost (50% Off) |
+|------------|------------------|---------------|----------------------|
+| **1,000 images** | ~1.2 Million | ~$0.10 USD | **~$0.05 USD** |
+| **5,000 images** | ~6.0 Million | ~$0.48 USD | **~$0.24 USD** |
+| **20,000 images** | ~24.1 Million | ~$1.90 USD | **~$0.95 USD** |
+
+*Note: The SQLite database self-calibrates to your personal usage. If you run `--dry-run`, the cost printed uses your actual historical data.*
 
 ## Important Notes
 
