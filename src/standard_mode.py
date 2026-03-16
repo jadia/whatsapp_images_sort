@@ -193,7 +193,17 @@ def run_standard_mode(
 
             # ── Step 3: Call the Gemini API ──────────────────────
             try:
-                logger.info("Sending %d image(s) to Gemini API (waiting for response)...", actual_count)
+                # Estimate payload size (Text prompt + Base64 images + JSON overhead)
+                # Base64 inflates byte size by ~33%. 
+                base64_size = sum((len(img_bytes) * 4) // 3 for _, img_bytes in images_data)
+                text_size = len(prompt.encode("utf-8"))
+                # Add rough JSON structure overhead (approx 1KB)
+                payload_mb = (base64_size + text_size + 1024) / (1024 * 1024)
+                
+                logger.info(
+                    "Sending %d image(s) to Gemini API (Payload: ~%.2f MB)...", 
+                    actual_count, payload_mb
+                )
 
                 def _call_api():
                     # This single synchronous call contains all interleaved images and text for the batch.
