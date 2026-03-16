@@ -44,6 +44,19 @@ class TestCostComputation:
         assert result.cost_usd == 0.0
         assert result.total_tokens == 0
 
+    def test_discount_multiplier_halves_cost(self, sample_config):
+        """When discount_multiplier is 0.5, cost should be exactly halved."""
+        standard_tracker = CostTracker(sample_config, discount_multiplier=1.0)
+        batch_tracker = CostTracker(sample_config, discount_multiplier=0.5)
+
+        std_result = standard_tracker.estimate_cost(10)
+        batch_result = batch_tracker.estimate_cost(10)
+
+        # Tokens shouldn't change, only final cost
+        assert std_result.total_tokens == batch_result.total_tokens
+        assert batch_result.cost_usd == (std_result.cost_usd * 0.5)
+        assert batch_result.cost_local == (std_result.cost_local * 0.5)
+
 
 class TestRecordUsage:
     """Tests for record_usage with images_in_request."""

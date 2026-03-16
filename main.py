@@ -214,10 +214,13 @@ def main() -> None:
     pending_count = queue_stats.get("Pending", 0)
     completed_count = queue_stats.get("Completed", 0)
 
-    cost_tracker = CostTracker(config)
     # Calibrate tracker with actual historical usage from DB for this specific model
-    estimation_stats = db.get_estimation_stats(config.active_model)
-    cost_tracker.calibrate_from_db(estimation_stats)
+    if config.api_mode == "batch":
+        cost_tracker = CostTracker(config, discount_multiplier=0.5)
+    else:
+        cost_tracker = CostTracker(config)
+        
+    cost_tracker.calibrate_from_db(db.get_estimation_stats(config.active_model))
 
     if args.dry_run:
         _print_dry_run_summary(

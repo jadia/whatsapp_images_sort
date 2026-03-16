@@ -64,16 +64,18 @@ class CostTracker:
     are computed from actual past usage rather than hardcoded.
     """
 
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, discount_multiplier: float = 1.0):
         """
         Initialise the cost tracker with pricing config.
 
         Args:
             config: The validated application config.
+            discount_multiplier: Scaling factor for final costs (e.g. 0.5 for batch mode).
         """
         self.pricing: ModelPricing = config.active_pricing
         self.exchange_rate: float = config.currency.usd_exchange_rate
         self.currency_symbol: str = config.currency.symbol
+        self.discount_multiplier: float = discount_multiplier
 
         # Per-image token estimates (defaults, overridden by calibrate_from_db)
         self._avg_input = AVG_INPUT_TOKENS_PER_IMAGE
@@ -203,7 +205,8 @@ class CostTracker:
         cost_usd = (
             (input_tokens / 1_000_000) * self.pricing.input_per_1m
             + (output_tokens / 1_000_000) * self.pricing.output_per_1m
-        )
+        ) * self.discount_multiplier
+        
         cost_local = cost_usd * self.exchange_rate
 
         return CostResult(
