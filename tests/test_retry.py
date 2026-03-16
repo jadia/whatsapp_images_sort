@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.retry import retry_with_backoff
+from src.utils.retry import retry_with_backoff
 
 
 class TestRetrySuccess:
@@ -29,7 +29,7 @@ class TestRetrySuccess:
         """Should retry once and succeed on the second call."""
         fn = MagicMock(side_effect=[ConnectionError("fail"), "ok"])
 
-        with patch("src.retry.time.sleep"):
+        with patch("src.utils.retry.time.sleep"):
             result = retry_with_backoff(fn, max_retries=3, base_delay=0.01)
 
         assert result == "ok"
@@ -44,7 +44,7 @@ class TestRetrySuccess:
             "finally",
         ])
 
-        with patch("src.retry.time.sleep"):
+        with patch("src.utils.retry.time.sleep"):
             result = retry_with_backoff(fn, max_retries=3, base_delay=0.01)
 
         assert result == "finally"
@@ -58,7 +58,7 @@ class TestRetryExhausted:
         """Should raise the last exception after all retries are exhausted."""
         fn = MagicMock(side_effect=ConnectionError("persistent failure"))
 
-        with patch("src.retry.time.sleep"):
+        with patch("src.utils.retry.time.sleep"):
             with pytest.raises(ConnectionError, match="persistent failure"):
                 retry_with_backoff(fn, max_retries=2, base_delay=0.01)
 
@@ -122,8 +122,8 @@ class TestRetryBackoff:
         def mock_sleep(duration):
             sleep_calls.append(duration)
 
-        with patch("src.retry.time.sleep", side_effect=mock_sleep):
-            with patch("src.retry.random.uniform", return_value=0):  # Remove jitter
+        with patch("src.utils.retry.time.sleep", side_effect=mock_sleep):
+            with patch("src.utils.retry.random.uniform", return_value=0):  # Remove jitter
                 retry_with_backoff(fn, max_retries=3, base_delay=1.0)
 
         # Expected: 1*2^0=1, 1*2^1=2, 1*2^2=4
@@ -145,8 +145,8 @@ class TestRetryBackoff:
         def mock_sleep(duration):
             sleep_calls.append(duration)
 
-        with patch("src.retry.time.sleep", side_effect=mock_sleep):
-            with patch("src.retry.random.uniform", return_value=0):
+        with patch("src.utils.retry.time.sleep", side_effect=mock_sleep):
+            with patch("src.utils.retry.random.uniform", return_value=0):
                 retry_with_backoff(fn, max_retries=2, base_delay=10.0, max_delay=15.0)
 
         # 10*2^0=10, 10*2^1=20 but capped at 15
@@ -162,8 +162,8 @@ class TestRetryBackoff:
         def mock_sleep(duration):
             sleep_calls.append(duration)
 
-        with patch("src.retry.time.sleep", side_effect=mock_sleep):
-            with patch("src.retry.random.uniform", return_value=0.5):
+        with patch("src.utils.retry.time.sleep", side_effect=mock_sleep):
+            with patch("src.utils.retry.random.uniform", return_value=0.5):
                 retry_with_backoff(fn, max_retries=1, base_delay=1.0)
 
         # 1*2^0 + 0.5 = 1.5
@@ -177,7 +177,7 @@ class TestRetryDescription:
         """The description parameter should be passed through for logging."""
         fn = MagicMock(side_effect=[ConnectionError("fail"), "ok"])
 
-        with patch("src.retry.time.sleep"):
+        with patch("src.utils.retry.time.sleep"):
             result = retry_with_backoff(
                 fn, max_retries=1, base_delay=0.01,
                 description="Test operation",

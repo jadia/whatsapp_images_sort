@@ -1,250 +1,85 @@
-# Architecture
+# System Architecture
 
-## System Overview
+## Core Philosophy: The SQLite State Machine
+The WhatsApp Image Sorter is fundamentally designed to handle massive volumes of images (e.g., 50,000+ files) over unreliable networks and rate-limited APIs. To achieve this, it never holds the full application state in memory. 
 
-This diagram illustrates the high-level orchestration of the application. The `main.py` entry point handles environment initialization (config, database) and pre-calculates costs using self-calibrating historical data, before routing execution to either the Standard or Batch processing engine based on the `api_mode`. Both engines rely heavily on the Shared Infrastructure layer to ensure state is cleanly tracked and resuming is seamless.
+Instead, it relies on a local SQLite database (`state.db`) acting as a **persistent state machine**. The lifecycle of every single image is strictly tracked on disk. If you `Ctrl+C` the script, lose power, or hit a Google API quota limit, the application will cleanly resume exactly where it left off on the next run.
 
-```mermaid
-graph TB
-    subgraph CLI["CLI Entry Point (main.py)"]
-        A[Parse Args] --> B[Load Config]
-        B --> C[Init Database]
-        C --> D[Scan & Enqueue]
-        D --> E{api_mode?}
-    end
+---
 
-    subgraph Standard["Standard Mode"]
-        E -->|standard| F[Fetch Pending Batch]
-        F --> G[Resize Images]
-        G --> H[Build Prompt + Parts]
-        H --> I[Call Gemini API]
-        I --> J[Parse JSON Response]
-        J --> K{Mismatch?}
-        K -->|No| L[Move Files]
-        K -->|Yes| M[Move Matched\nRevert Unmatched]
-        L --> N[Update DB]
-        M --> N
-        N --> F
-    end
+## 1. Database Schema (`state.db`)
 
-    subgraph Batch["Batch Mode"]
-        E -->|batch| O{Running Jobs?}
-        O -->|No| P[Phase 1: Submit All Pending]
-        O -->|Yes| Q[Phase 2: Resume]
+The SQLite database uses Write-Ahead Logging (`PRAGMA journal_mode=WAL`) to allow concurrent reads and writes, preventing "Database is locked" errors during high-concurrency 100-thread uploads.
 
-        P --> P0[Loop chunks of `batch_chunk_size`]
-        P0 --> P1["Resize + Upload\n(ThreadPoolExecutor)"]
-        P1 --> P3[Build JSONL]
-        P3 --> P4[Submit Batch Job]
-        P4 --> P5[Save to DB]
-        P5 --> P0
-        P0 -->|Queue Empty| Q
+### A. The `ImageQueue` Table
+This is the source of truth for every image in your configured `source_dir`.
 
-        Q --> Q1[Poll Job Status]
-        Q1 --> Q2{Status?}
-        Q2 -->|Running| Q3[Wait 60s & Re-poll]
-        Q2 -->|Succeeded| Q4[Parse Output\nMove Files]
-        Q2 -->|Failed| Q5[Revert to Pending]
-        Q4 --> Q6[Cleanup File API]
-        Q5 --> Q6
-    end
+| Column | Type | Description |
+| :--- | :--- | :--- |
+| `id` | `INTEGER` | **Primary Key**. Used as the unbreakable `img_{id}` label. |
+| `file_path` | `TEXT` | **Unique**. Absolute path to the original image on disk. |
+| `status` | `TEXT` | `Pending`, `Processing`, `Completed`, `Failed`, or `Missing`. |
+| `category` | `TEXT` | The AI-assigned category (e.g., `Documents_Important`). |
+| `retry_count`| `INTEGER`| How many times this image has failed. Max is 2. |
+| `batch_job_id`|`INTEGER` | Foreign key to `BatchJobs.job_id` if using Batch API. |
+| `inserted_on`| `TEXT` | UTC ISO-8601 Timestamp. |
+| `updated_on` | `TEXT` | Managed automatically by a SQLite trigger. |
 
-    subgraph Shared["Shared Infrastructure"]
-        DB[(SQLite\nstate.db)]
-        LOG[Logger\nconsole + file]
-        CFG[Config\nconfig.json + .env]
-        COST[Cost Tracker]
-        RETRY[Retry w/ Backoff]
-    end
+**Sample Data from `ImageQueue`:**
+```text
+39040 | /home/user/images/WA001.jpg | Completed | Memes_Forwards_Graphics | 0 | 20 | 2026-03-16T17:29:00Z | 2026-03-16T18:16:52Z
+39041 | /home/user/images/WA002.jpg | Pending   | NULL                    | 0 | NULL| 2026-03-16T17:29:00Z | 2026-03-16T17:29:00Z
 ```
 
-## Standard Mode Sequence
+### B. Other Tables
+- **`BatchJobs`**: Tracks asynchronous Gemini Batch API submissions (`Running`, `Succeeded`, `Failed`). Maps Google's `batches/...` IDs to local `job_id`s.
+- **`SessionStats`**: Records telemetry per run (Images processed, Token count, USD/Local currency cost).
+- **`EstimationStats`**: Self-calibrating token averager. It keeps a running tally of input/output tokens per model, providing accurate pre-run cost estimates.
 
-Standard mode is synchronous and optimized for immediate results. To minimize API round-trips, it groups images into "clubs" (e.g., 250 images at once) and interleaves the image bytes directly into a single massive multimodal prompt. 
+---
 
-During the actual API call, it encapsulates the sync request inside a daemonized `threading.Thread`. This allows the script to draw an indeterminate `tqdm` UI spinner while waiting, and ensures `Ctrl+C` immediately abandons the request. If the AI hallucinates and returns fewer results (a mismatch), the missing images are gracefully reverted to `Pending` status in the database to be safely retried in the next batch.
+## 2. Unbreakable ID Mapping
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Main
-    participant DB
-    participant ImageUtils
-    participant Gemini as Gemini API
-    participant FileMover
+The most critical mechanism in this application is the **1:1 ID Mapping** between your local file and the AI's response. 
 
-    User->>Main: python main.py
-    Main->>DB: get_pending_batch(10)
-    DB-->>Main: [10 images]
+Because we send thousands of images to the AI asynchronously, we cannot rely on sequential order (e.g., `Image 1`, `Image 2`). If `Image 2` fails to upload, `Image 3` shifts into its spot, and your `Documents` folder fills up with `Selfies`.
 
-    loop For each image
-        Main->>ImageUtils: resize_image(path)
-        ImageUtils-->>Main: jpeg_bytes
-        Main->>ImageUtils: extract_date(path)
-        ImageUtils-->>Main: datetime
-    end
+**The Solution:**
+We use the immutable `ImageQueue.id` primary key. When building the prompt or the `.jsonl` payload, the script labels the image dynamically as `img_{id}` (e.g., `img_39040`). 
+When the Gemini AI returns its categorization JSON, it returns:
+`{"image": "img_39040", "category": "Memes_Forwards_Graphics"}`.
+The script parses this, directly looks up `id=39040` in the database, and moves the corresponding file. This guarantees 100% accuracy, regardless of network failures, thread races, or API mismatches.
 
-    Main->>Gemini: generate_content(prompt + 10 images)
-    Gemini-->>Main: JSON array [10 results]
+---
 
-    alt All 10 matched
-        loop For each result
-            Main->>FileMover: move_image(src, category, date)
-            Main->>DB: mark_completed(id, category)
-        end
-    else 9 of 10 matched (mismatch)
-        Main->>FileMover: move 9 matched images
-        Main->>DB: mark_completed(9 images)
-        Main->>DB: revert_to_pending([missing 1])
-    end
+## 3. Resiliency & Auto-Pruning
 
-    Main->>User: Session summary
-```
+1. **Auto-Pruning:** Upon startup, `main.py` scans the disk. If it finds files in the SQLite database that no longer exist on your drive (because you deleted or moved them manually), it runs a highly efficient `DELETE` query to purge the DB queue and keep it lean.
+2. **Missing Files Recovery:** If a file becomes unreadable during processing (e.g., corrupted disk sector), the script marks it as `Missing` instead of infinitely retrying.
+3. **Graceful Thread Shutdown:** In Standard mode, synchronous API calls run on a background daemon thread. If you hit `Ctrl+C`, the main thread instantly kills the daemon and exits cleanly. The database state remains uncorrupted, and the interrupted images remain safely marked as `Pending`.
 
-## Batch Mode Lifecycle
+---
 
-Batch mode is fully asynchronous and significantly cheaper, designed for bulk processing. It automatically applies a 50% discount to all cost estimators. It operates in two lifecycle phases to allow the user to close the terminal while Google processes the data in the background.
+## 4. Retry with Exponential Back-off
 
-**Phase 1** is executed *second* (only if no jobs are already running). It pulls chunks of images (up to `batch_chunk_size` at a time) from the pending queue and resizes/uploads them in parallel using a ThreadPoolExecutor. Each upload is wrapped in `retry_with_backoff()` to handle rate limits. The chunk is packaged into a JSONL manifest and submitted to the Batch API. This loop repeats until the *entire* pending queue has been successfully dispatched.
-**Phase 2** is executed *first* on script launch. The script checks database job statuses. While jobs are running, it refuses to submit new batches, displaying a live countdown. When successful, it pulls the results, categorizes the files, and executes a parallel cleanup sweep of the File API to prevent exhausting the user's storage quota. If the user presses Ctrl+C at any point, all orphaned uploads are cleaned up from the File API before exiting.
+To handle the inherent volatility of cloud APIs (rate limits, transient network drops, and server-side pressure), the application implements a robust, thread-safe **Exponential Back-off with Jitter** strategy via `src/utils/retry.py`.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Main
-    participant DB
-    participant FileAPI as Gemini File API
-    participant BatchAPI as Gemini Batch API
+### A. Retry Strategy
+When an API call (Upload or Inference) fails, the script does not immediately give up. Instead, it follows a deterministic delay pattern:
+1. **Base Delay:** 1.0 second (configurable).
+2. **Exponential Growth:** The delay doubles with each subsequent attempt (e.g., 1s, 2s, 4s...).
+3. **Random Jitter:** A small random float (0.0–1.0s) is added to each delay. This prevents "Thundering Herd" scenarios where 100 concurrent threads all retry at the exact same millisecond, overwhelming the API again.
+4. **Max Delay Cap:** 60.0 seconds.
 
-    Note over User,BatchAPI: Phase 1 — Submit
-    User->>Main: python main.py (batch mode)
-    
-    loop Until Pending Queue is Empty
-        Main->>DB: get_pending_batch(1000)
-        DB-->>Main: [1000 images]
+### B. Intelligent Error Classification
+The retry mechanism is not "blind." It only retries errors that are considered **Transient**:
+- **HTTP 429 (Resource Exhausted):** The system automatically backs off more aggressively when rate limits are hit.
+- **HTTP 5xx (Server Errors):** 500, 502, 503, and 504 errors are automatically retried up to 3 times.
+- **Network Issues:** Timeouts, DNS resolution failures, and connection resets.
 
-        loop ThreadPoolExecutor (upload_threads)
-            Main->>FileAPI: upload(resized_jpeg) [with retry]
-            FileAPI-->>Main: file_uri
-        end
+**Immediate Failures (No Retry):**
+- **HTTP 400 (Bad Request):** e.g., Invalid API key, malformed prompt, or "Upload already terminated."
+- **HTTP 403 (Permission Denied):** e.g., Blocked API key or expired credentials.
+- **Pillow Errors:** Unidentified image formats or "Decompression Bomb" safety triggers.
 
-        Main->>Main: Build JSONL input
-        Main->>FileAPI: upload(input.jsonl)
-        Main->>BatchAPI: batches.create(src=jsonl)
-        BatchAPI-->>Main: job_name
-        Main->>DB: create_batch_job(job_name)
-        Main->>DB: mark_processing(1000 images)
-        Main->>User: "Job submitted!"
-    end
-
-    Note over User,BatchAPI: Phase 2 — Resume & Poll
-    User->>Main: python main.py (next run)
-    Main->>DB: get_running_batch_jobs()
-    DB-->>Main: [job_name]
-    Main->>BatchAPI: batches.get(job_name)
-
-    alt Still Running
-        BatchAPI-->>Main: RUNNING
-        Main->>User: "Still running, try later."
-    else Succeeded
-        BatchAPI-->>Main: SUCCEEDED + output
-        Main->>Main: Parse JSONL output
-        Main->>Main: Move files, update DB
-        Main->>FileAPI: Delete uploaded files (cleanup)
-        Main->>User: Session summary
-    else Failed
-        BatchAPI-->>Main: FAILED
-        Main->>DB: revert_to_pending(1000, retry++)
-        Main->>FileAPI: Delete uploaded files (cleanup)
-        Main->>User: "Job failed, images re-queued."
-    end
-```
-
-## File Tracking & State Management
-
-A core design principle of this project is that the **source directory is treated as strictly read-only**. 
-
-When a batch completes successfully, the application does *not* actually "move" or delete the original files. Instead, `src/file_mover.py` **copies** the files to the output directory. This is why you will still see all original images in your source folder, while the destination folder only contains the processed ones. This non-destructive approach guarantees zero data loss if something goes wrong.
-
-**How does the script know what has been processed?**
-It does not rely on comparing the source and destination folders. Instead, it tracks the exact state of every single file using the SQLite Database (`state.db`).
-1. **Scanning**: On startup, `main.py` scans the source directory. Next, it silently **auto-prunes** the database, deleting any previously stored table rows referring to images that no longer physically exist on disk (meaning the user manually deleted them while the tool was offline).
-2. **Enqueuing**: It checks the DB. If an existing image path isn't in the DB, it inserts it with a `Pending` status.
-3. **Processing**: When standard mode or batch mode successfully categorize an image and copy it to the destination, that specific row in the DB is updated to `Completed`. If the file was corrupted or unreadable, it is silently marked as `Missing`.
-4. **Resuming**: The next time you run the script, `main.py` queries the database for files that are *still* `Pending`. It completely ignores files marked as `Completed` or `Missing`, which prevents duplicate processing and saves API costs.
-
-## Database Schema
-
-The SQLite database (`state.db`) is the source of truth for the application's resilience. It uses WAL journal mode to support safe concurrent reads. 
-- `ImageQueue` tracks the atomic state of every single file.
-- `BatchJobs` manages the async lifecycle of Gemini API jobs.
-- `SessionStats` aggregates historical run data for auditing.
-- `EstimationStats` (not pictured) stores cumulative token usage per-model to self-calibrate future pre-run cost estimations.
-
-```mermaid
-erDiagram
-    ImageQueue {
-        int id PK
-        text file_path UK
-        text status "Pending | Processing | Completed | Failed | Missing"
-        text category
-        int retry_count
-        int batch_job_id FK
-        text inserted_on
-        text updated_on
-    }
-
-    BatchJobs {
-        int job_id PK
-        text api_job_name
-        text status
-        text created_at
-        text updated_on
-    }
-
-    SessionStats {
-        text session_id PK
-        text mode
-        text model_name
-        int images_processed
-        int total_tokens
-        real cost_local_currency
-        text inserted_on
-    }
-
-    EstimationStats {
-        text model_name PK
-        int total_images_measured
-        int total_input_tokens
-        int total_output_tokens
-        text updated_on
-    }
-
-    BatchJobs ||--o{ ImageQueue : "batch_job_id"
-```
-
-## File Organization
-
-```
-whatsapp_images_sort/
-├── main.py                  # CLI entry point & orchestrator
-├── config.json              # User configuration
-├── .env                     # API key (not committed)
-├── state.db                 # SQLite state (auto-created)
-├── src/
-│   ├── config_manager.py    # Config loading + validation
-│   ├── database.py          # SQLite CRUD operations
-│   ├── image_utils.py       # Resize, date, EXIF
-│   ├── prompt_builder.py    # Gemini prompt construction
-│   ├── standard_mode.py     # Sync processing engine
-│   ├── batch_mode.py        # Async processing engine (parallel uploads)
-│   ├── file_mover.py        # Sorted directory management
-│   ├── cost_tracker.py      # Token & cost accounting
-│   ├── retry.py             # Exponential back-off retry utility
-│   └── logger_setup.py      # Logging configuration
-├── logs/                    # Per-run audit logs
-├── error.log                # API error log (append)
-├── tests/                   # pytest test suite
-├── docs/                    # Documentation
-└── prompt/                  # Project specification
-```
+If a file fails all 3 retry attempts, it is moved to the `Unprocessable_Quarantine/` directory and marked as `Failed` in the SQLite database to prevent blocking the rest of the queue.

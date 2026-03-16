@@ -20,8 +20,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from google import genai
-from src.config_manager import load_config
-from src.retry import retry_with_backoff
+from src.models.config import load_config
+from src.utils.retry import retry_with_backoff
 import logging
 
 # Set up simple logging to console

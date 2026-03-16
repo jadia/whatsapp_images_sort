@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from src.database import (
+from src.utils.database import (
     BATCH_FAILED,
     BATCH_RUNNING,
     BATCH_SUCCEEDED,
@@ -71,14 +71,14 @@ class TestImageQueue:
 
         batch = test_db.get_pending_batch(limit=2)
         assert len(batch) == 2
-        assert batch[0]["file_path"] == "/img/1.jpg"
-        assert batch[1]["file_path"] == "/img/2.jpg"
+        assert batch[0].file_path == "/img/1.jpg"
+        assert batch[1].file_path == "/img/2.jpg"
 
     def test_mark_completed(self, test_db):
         """Should update status to Completed with category."""
         test_db.enqueue_images(["/img/test.jpg"])
         batch = test_db.get_pending_batch(1)
-        img_id = batch[0]["id"]
+        img_id = batch[0].id
 
         test_db.mark_completed(img_id, "People & Social")
 
@@ -99,7 +99,7 @@ class TestImageQueue:
         test_db.enqueue_images(["/img/a.jpg", "/img/b.jpg"])
         batch = test_db.get_pending_batch(10)
 
-        results = [(batch[0]["id"], "Memes"), (batch[1]["id"], "Documents")]
+        results = [(batch[0].id, "Memes"), (batch[1].id, "Documents")]
         test_db.mark_completed_batch(results)
 
         remaining = test_db.get_pending_batch(10)
@@ -109,7 +109,7 @@ class TestImageQueue:
         """Should mark as Failed and increment retry_count."""
         test_db.enqueue_images(["/img/fail.jpg"])
         batch = test_db.get_pending_batch(1)
-        img_id = batch[0]["id"]
+        img_id = batch[0].id
 
         test_db.mark_failed(img_id)
         test_db.mark_failed(img_id)  # Fail twice
@@ -125,7 +125,7 @@ class TestImageQueue:
         """Should mark an image as Missing."""
         test_db.enqueue_images(["/img/missing.jpg"])
         batch = test_db.get_pending_batch(1)
-        img_id = batch[0]["id"]
+        img_id = batch[0].id
         
         # We need to import STATUS_MISSING or assert against the string directly
         test_db.mark_missing(img_id)
@@ -139,7 +139,7 @@ class TestImageQueue:
         """Should revert images back to Pending."""
         test_db.enqueue_images(["/img/a.jpg", "/img/b.jpg"])
         batch = test_db.get_pending_batch(10)
-        ids = [row["id"] for row in batch]
+        ids = [row.id for row in batch]
 
         # Mark as Processing first
         test_db.mark_processing(ids)
@@ -183,7 +183,7 @@ class TestImageQueue:
         """Should revert to Pending and increment retry_count."""
         test_db.enqueue_images(["/img/retry.jpg"])
         batch = test_db.get_pending_batch(1)
-        img_id = batch[0]["id"]
+        img_id = batch[0].id
 
         test_db.mark_processing([img_id])
         test_db.revert_to_pending_with_retry([img_id])
@@ -211,7 +211,7 @@ class TestImageQueue:
         """updated_on should change after an update (via trigger)."""
         test_db.enqueue_images(["/img/audit2.jpg"])
         batch = test_db.get_pending_batch(1)
-        img_id = batch[0]["id"]
+        img_id = batch[0].id
 
         cursor = test_db.conn.execute(
             "SELECT updated_on FROM ImageQueue WHERE id = ?", (img_id,)
@@ -233,8 +233,8 @@ class TestImageQueue:
         test_db.enqueue_images(["/img/a.jpg", "/img/b.jpg", "/img/c.jpg"])
         batch = test_db.get_pending_batch(10)
 
-        test_db.mark_completed(batch[0]["id"], "Cat1")
-        test_db.mark_failed(batch[1]["id"])
+        test_db.mark_completed(batch[0].id, "Cat1")
+        test_db.mark_failed(batch[1].id)
 
         stats = test_db.get_queue_stats()
         assert stats[STATUS_PENDING] == 1
@@ -259,7 +259,7 @@ class TestBatchJobs:
 
         running = test_db.get_running_batch_jobs()
         assert len(running) == 1
-        assert running[0]["api_job_name"] == "batches/running1"
+        assert running[0].api_job_name == "batches/running1"
 
     def test_update_batch_job_status(self, test_db):
         """Should update the status of a batch job."""
@@ -276,13 +276,13 @@ class TestBatchJobs:
         job_id = test_db.create_batch_job("batches/link_test")
         test_db.enqueue_images(["/img/b1.jpg", "/img/b2.jpg", "/img/b3.jpg"])
         batch = test_db.get_pending_batch(10)
-        ids = [row["id"] for row in batch]
+        ids = [row.id for row in batch]
 
         test_db.mark_processing(ids, batch_job_id=job_id)
 
         linked = test_db.get_images_by_batch_job(job_id)
         assert len(linked) == 3
-        assert all(img["status"] == STATUS_PROCESSING for img in linked)
+        assert all(img.status == STATUS_PROCESSING for img in linked)
 
 
 class TestSessionStats:

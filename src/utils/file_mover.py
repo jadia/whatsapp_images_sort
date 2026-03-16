@@ -20,7 +20,7 @@ import shutil
 from datetime import datetime
 from typing import Optional
 
-from src.image_utils import restore_exif_date
+from src.utils.image_utils import restore_exif_date
 
 logger = logging.getLogger("whatsapp_sorter")
 

@@ -9,8 +9,8 @@ calibration from DB, and estimation actuals.
 
 import pytest
 
-from src.config_manager import AppConfig, CurrencyConfig, FeaturesConfig, ModelPricing
-from src.cost_tracker import CostTracker, AVG_INPUT_TOKENS_PER_IMAGE, AVG_OUTPUT_TOKENS_PER_IMAGE
+from src.models.config import AppConfig, CurrencyConfig, FeaturesConfig, ModelPricing
+from src.utils.cost_tracker import CostTracker, AVG_INPUT_TOKENS_PER_IMAGE, AVG_OUTPUT_TOKENS_PER_IMAGE
 
 
 @pytest.fixture

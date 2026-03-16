@@ -275,6 +275,7 @@ def load_config(
     standard_club_size = int(raw.get("standard_club_size", 10))
     upload_threads = int(raw.get("upload_threads", 10))
     if not (1 <= upload_threads <= 150):
+
         _fail(f"'upload_threads' must be between 1 and 150, got: {upload_threads}")
 
     # ── Step 4: Build and return the frozen config ───────────

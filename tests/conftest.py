@@ -21,8 +21,8 @@ from unittest.mock import patch
 import pytest
 from PIL import Image
 
-from src.config_manager import AppConfig, CategoryDef, CurrencyConfig, FeaturesConfig, ModelPricing
-from src.database import Database
+from src.models.config import AppConfig, CategoryDef, CurrencyConfig, FeaturesConfig, ModelPricing
+from src.utils.database import Database
 
 
 @pytest.fixture

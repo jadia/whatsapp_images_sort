@@ -14,9 +14,9 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 from PIL import Image
 
-from src.config_manager import AppConfig, CurrencyConfig, FeaturesConfig, ModelPricing, CategoryDef
-from src.cost_tracker import CostTracker
-from src.database import (
+from src.models.config import AppConfig, CurrencyConfig, FeaturesConfig, ModelPricing, CategoryDef
+from src.utils.cost_tracker import CostTracker
+from src.utils.database import (
     BATCH_FAILED,
     BATCH_RUNNING,
     BATCH_SUCCEEDED,
@@ -25,7 +25,7 @@ from src.database import (
     STATUS_PROCESSING,
     Database,
 )
-from src.batch_mode import run_batch_mode, _save_batch_metadata, _load_batch_metadata
+from src.core.batch_mode import run_batch_mode, _save_batch_metadata, _load_batch_metadata
 
 
 @pytest.fixture
@@ -98,12 +98,13 @@ class TestBatchMetadata:
         original_cwd = os.getcwd()
         os.chdir(str(tmp_path))
 
+        from src.models.datatypes import ImageRow
         uploaded = [
             {
                 "label": "img_42",
                 "file_api_name": "files/abc123",
                 "file_uri": "gs://bucket/abc123",
-                "db_row": {"file_path": "/img/test.jpg"},
+                "db_row": ImageRow(id=42, file_path="/img/test.jpg", status="Pending", retry_count=0),
             }
         ]
 
@@ -150,7 +151,7 @@ class TestBatchSubmit:
 
         # Complete all images
         for row in db.get_pending_batch(100):
-            db.mark_completed(row["id"], "Done")
+            db.mark_completed(row.id, "Done")
 
         processed = run_batch_mode(
             config=batch_env["config"],
@@ -160,7 +161,7 @@ class TestBatchSubmit:
 
         assert processed == 0
 
-    @patch("src.batch_mode._submit_batch_job")
+    @patch("src.core.batch_mode._submit_batch_job")
     def test_multi_submit_loop(self, mock_submit, batch_env):
         """Phase 1 should loop and submit batches until the queue is exhausted."""
         # Setup: Mock _submit_batch_job to return True 3 times, then False.
@@ -179,7 +180,7 @@ class TestBatchSubmit:
         assert processed == 0
         assert mock_submit.call_count == 4
 
-    @patch("src.batch_mode._submit_batch_job")
+    @patch("src.core.batch_mode._submit_batch_job")
     def test_test_mode_limits_loop(self, mock_submit, batch_env):
         """Test mode should break the submit loop after exactly one call."""
         mock_submit.return_value = True
@@ -198,10 +199,10 @@ class TestBatchSubmit:
 class TestBatchSubmitIntegration:
     """Integration tests for _submit_batch_job without mocking the entire function."""
 
-    @patch("src.batch_mode.genai")
+    @patch("src.core.batch_mode.genai")
     def test_submit_batch_job_integration(self, mock_genai, batch_env):
         """Should resize images, call upload, build jsonl, and submit job successfully."""
-        from src.batch_mode import _submit_batch_job
+        from src.core.batch_mode import _submit_batch_job
 
         mock_client = MagicMock()
         mock_genai.Client.return_value = mock_client
@@ -233,7 +234,7 @@ class TestBatchSubmitIntegration:
         # Verify db was updated
         running = db.get_running_batch_jobs()
         assert len(running) == 1
-        assert running[0]["api_job_name"] == "batches/test_job_123"
+        assert running[0].api_job_name == "batches/test_job_123"
 
         # Verify API calls were made (5 images + 1 jsonl = 6 uploads)
         assert mock_client.files.upload.call_count == 6
@@ -250,10 +251,10 @@ class TestBatchResume:
         # Simulate a running job in the database
         job_id = db.create_batch_job("batches/test-running")
         pending = db.get_pending_batch(5)
-        db.mark_processing([r["id"] for r in pending], batch_job_id=job_id)
+        db.mark_processing([r.id for r in pending], batch_job_id=job_id)
 
         # Mock the Gemini client and time.sleep
-        with patch("src.batch_mode.genai") as mock_genai, patch("src.batch_mode.time.sleep", side_effect=KeyboardInterrupt):
+        with patch("src.core.batch_mode.genai") as mock_genai, patch("src.core.batch_mode.time.sleep", side_effect=KeyboardInterrupt):
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
 
@@ -272,7 +273,7 @@ class TestBatchResume:
         running = db.get_running_batch_jobs()
         assert len(running) == 1
 
-    @patch("src.batch_mode._submit_batch_job")
+    @patch("src.core.batch_mode._submit_batch_job")
     def test_failed_job_reverts_images(self, mock_submit, batch_env):
         """Failed batch job should revert images to Pending."""
         mock_submit.return_value = False
@@ -280,10 +281,10 @@ class TestBatchResume:
 
         job_id = db.create_batch_job("batches/test-failed")
         pending = db.get_pending_batch(5)
-        image_ids = [r["id"] for r in pending]
+        image_ids = [r.id for r in pending]
         db.mark_processing(image_ids, batch_job_id=job_id)
 
-        with patch("src.batch_mode.genai") as mock_genai:
+        with patch("src.core.batch_mode.genai") as mock_genai:
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
 
@@ -306,20 +307,20 @@ class TestBatchResume:
         running = db.get_running_batch_jobs()
         assert len(running) == 0
 
-    @patch("src.batch_mode.genai")
-    @patch("src.batch_mode.move_image")
+    @patch("src.core.batch_mode.genai")
+    @patch("src.core.batch_mode.move_image")
     def test_succeeded_job_downloads_and_parses(self, mock_move, mock_genai, batch_env):
         """Succeeded batch job should download response, parse it, update db, and move files."""
         db = batch_env["db"]
 
         job_id = db.create_batch_job("batches/test-success")
         pending = db.get_pending_batch(2)
-        image_ids = [r["id"] for r in pending]
+        image_ids = [r.id for r in pending]
         db.mark_processing(image_ids, batch_job_id=job_id)
 
         # Save metadata so the resume process knows about the files
-        from src.batch_mode import _save_batch_metadata
-        id1, id2 = pending[0]["id"], pending[1]["id"]
+        from src.core.batch_mode import _save_batch_metadata
+        id1, id2 = pending[0].id, pending[1].id
         uploaded = [
             {"label": f"img_{id1}", "file_api_name": "files/a", "file_uri": "gs://a", "db_row": pending[0]},
             {"label": f"img_{id2}", "file_api_name": "files/b", "file_uri": "gs://b", "db_row": pending[1]},
@@ -344,7 +345,7 @@ class TestBatchResume:
         mock_client.files.download.return_value = fake_jsonl.encode("utf-8")
 
         # Mock _submit_batch_job to prevent it from queueing the remaining 3 items
-        with patch("src.batch_mode._submit_batch_job", return_value=False):
+        with patch("src.core.batch_mode._submit_batch_job", return_value=False):
             processed = run_batch_mode(
                 config=batch_env["config"],
                 db=db,
@@ -366,7 +367,7 @@ class TestFileAPICleanup:
 
     def test_cleanup_deletes_all_files(self, batch_env):
         """Cleanup should attempt to delete all uploaded files."""
-        from src.batch_mode import _cleanup_file_api
+        from src.core.batch_mode import _cleanup_file_api
 
         mock_client = MagicMock()
         file_names = ["files/abc", "files/def", "files/ghi"]
@@ -377,7 +378,7 @@ class TestFileAPICleanup:
 
     def test_cleanup_handles_delete_errors(self, batch_env):
         """Failed deletes should be logged but not raise."""
-        from src.batch_mode import _cleanup_file_api
+        from src.core.batch_mode import _cleanup_file_api
 
         mock_client = MagicMock()
         mock_client.files.delete.side_effect = Exception("Quota exceeded")
@@ -387,7 +388,7 @@ class TestFileAPICleanup:
 
     def test_cleanup_with_none_client(self, batch_env):
         """Should handle None client gracefully."""
-        from src.batch_mode import _cleanup_file_api
+        from src.core.batch_mode import _cleanup_file_api
 
         # Should not raise
         _cleanup_file_api(None, batch_env["config"], ["files/abc"])

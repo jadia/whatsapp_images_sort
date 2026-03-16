@@ -20,7 +20,7 @@ import base64
 import logging
 from typing import Any, Dict, List, Tuple
 
-from src.config_manager import CategoryDef
+from src.models.config import CategoryDef
 
 logger = logging.getLogger("whatsapp_sorter")
 

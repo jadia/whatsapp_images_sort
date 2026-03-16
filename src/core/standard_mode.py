@@ -30,13 +30,13 @@ from google import genai
 from google.genai import types
 from tqdm import tqdm
 
-from src.config_manager import AppConfig
-from src.cost_tracker import CostTracker
-from src.database import Database, STATUS_PENDING
-from src.file_mover import move_image, move_to_unprocessable
-from src.image_utils import extract_date, resize_image
-from src.prompt_builder import build_standard_prompt
-from src.retry import retry_with_backoff
+from src.models.config import AppConfig
+from src.utils.cost_tracker import CostTracker
+from src.utils.database import Database, STATUS_PENDING
+from src.utils.file_mover import move_image, move_to_unprocessable
+from src.utils.image_utils import extract_date, resize_image
+from src.core.prompt_builder import build_standard_prompt
+from src.utils.retry import retry_with_backoff
 
 logger = logging.getLogger("whatsapp_sorter")
 
@@ -155,7 +155,7 @@ def run_standard_mode(
 
             for i, row in enumerate(pending_batch, start=1):
                 label = f"Image_{i}"
-                file_path = row["file_path"]
+                file_path = row.file_path
                 original_filename = os.path.basename(file_path)
 
                 # ── Step 1a: Pre-flight checks ───────────────────────
@@ -165,7 +165,7 @@ def run_standard_mode(
                         move_to_unprocessable(file_path, config.output_dir)
                     except OSError as e:
                         logger.debug("Failed to quarantine AppleDouble file: %s", e)
-                    db.mark_failed(row["id"])
+                    db.mark_failed(row.id)
                     continue
                     
                 _, ext = os.path.splitext(original_filename)
@@ -175,7 +175,7 @@ def run_standard_mode(
                         move_to_unprocessable(file_path, config.output_dir)
                     except OSError as e:
                         logger.debug("Failed to quarantine ignored file: %s", e)
-                    db.mark_failed(row["id"])
+                    db.mark_failed(row.id)
                     continue
 
                 try:
@@ -192,11 +192,11 @@ def run_standard_mode(
 
                 except (FileNotFoundError, PermissionError) as exc:
                     logger.warning("File missing or unreadable %s: %s", label, exc)
-                    db.mark_missing(row["id"])
+                    db.mark_missing(row.id)
 
                 except Exception as exc:
                     logger.error("Failed to prepare image %s (%s): %s", label, file_path, exc)
-                    db.mark_failed(row["id"])
+                    db.mark_failed(row.id)
                     try:
                         move_to_unprocessable(file_path, config.output_dir)
                     except OSError as e:
@@ -283,7 +283,7 @@ def run_standard_mode(
                     exc_info=True,
                 )
                 # Revert all images in batch to Pending for retry
-                failed_ids = [image_map[lbl]["db_row"]["id"] for lbl in image_map]
+                failed_ids = [image_map[lbl]["db_row"].id for lbl in image_map]
                 db.revert_to_pending(failed_ids)
                 # Update the progress bar for the failed batch
                 pbar.update(batch_size)
@@ -317,7 +317,7 @@ def run_standard_mode(
                     batch_number, exc,
                     getattr(response, "text", "<no text>"),
                 )
-                failed_ids = [image_map[lbl]["db_row"]["id"] for lbl in image_map]
+                failed_ids = [image_map[lbl]["db_row"].id for lbl in image_map]
                 db.revert_to_pending(failed_ids)
                 # Update the progress bar for the failed batch
                 pbar.update(batch_size)
@@ -348,21 +348,21 @@ def run_standard_mode(
                 # ── Move the file ────────────────────────────────
                 try:
                     move_image(
-                        src_path=row["file_path"],
+                        src_path=row.file_path,
                         category=category,
                         date=date,
                         output_dir=config.output_dir,
                         exif_restore=config.features.restore_exif_date,
                     )
-                    db.mark_completed(row["id"], category)
+                    db.mark_completed(row.id, category)
                     batch_processed += 1
 
                 except Exception as exc:
                     logger.error(
                         "Failed to move image %s (%s): %s",
-                        label, row["file_path"], exc,
+                        label, row.file_path, exc,
                     )
-                    db.mark_failed(row["id"])
+                    db.mark_failed(row.id)
 
             # ── Step 7: Handle mismatches ────────────────────────
             unmatched_labels = set(image_map.keys()) - matched_labels
@@ -373,7 +373,7 @@ def run_standard_mode(
                     len(matched_labels), actual_count, unmatched_labels,
                 )
                 unmatched_ids = [
-                    image_map[lbl]["db_row"]["id"]
+                    image_map[lbl]["db_row"].id
                     for lbl in unmatched_labels
                 ]
                 db.revert_to_pending(unmatched_ids)

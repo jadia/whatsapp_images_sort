@@ -16,7 +16,7 @@ Additionally, an error-specific append-mode file handler writes
 to error.log for quick triage of API and processing failures.
 
 Usage:
-    from src.logger_setup import setup_logging
+    from src.utils.logger_setup import setup_logging
     logger = setup_logging()           # call once at startup
     logger.info("User-visible message")
     logger.debug("Audit-only detail")
