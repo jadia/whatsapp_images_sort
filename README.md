@@ -152,17 +152,18 @@ Choosing the right mode in `config.json` depends entirely on your queue size and
 - **Phase 2 (Poll):** Instead of keeping a synchronous connection open, the application steps back and automatically polls Google until their servers have processed your entire backlog.
 - Automatic cleanup of File API uploads when completed or cancelled.
 
-## Realistic Cost Analysis (gemini-3.1-flash-lite)
+## Realistic Cost Analysis (gemini-3.1-flash-lite-preview)
 
 Using Gemini's Batch API makes classifying thousands of images impressively cheap. 
 
-The costs shown below are projections modeled using **real token usage averages** pulled from this app's SQLite tracking history (averaging **1,187 input tokens** and **19 output tokens** per 384x384 image footprint):
+The costs shown below are projections modeled using **real token usage averages** pulled from a live run of 16,638 images (averaging **1,522 input tokens** and **21 output tokens** per 384x384 image footprint):
 
 | Queue Size | Projected Tokens | Standard Cost | Batch Cost (50% Off) |
 |------------|------------------|---------------|----------------------|
-| **1,000 images** | ~1.2 Million | ~$0.10 USD | **~$0.05 USD** |
-| **5,000 images** | ~6.0 Million | ~$0.48 USD | **~$0.24 USD** |
-| **20,000 images** | ~24.1 Million | ~$1.90 USD | **~$0.95 USD** |
+| **1,000 images** | ~1.5 Million | ~$0.41 USD | **~$0.21 USD (₹17.20 INR)** |
+| **5,000 images** | ~7.7 Million | ~$2.06 USD | **~$1.03 USD (₹86.00 INR)** |
+| **16,638 images** | ~25.7 Million | ~$6.86 USD | **~$3.43 USD (₹286.41 INR)** |
+| **20,000 images** | ~30.9 Million | ~$8.24 USD | **~$4.12 USD (₹344.02 INR)** |
 
 *Note: The SQLite database self-calibrates to your personal usage. If you run `--dry-run`, the cost printed uses your actual historical data.*
 
