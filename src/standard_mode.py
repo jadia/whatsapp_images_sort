@@ -20,6 +20,8 @@ All API calls are wrapped in try/except with error logging.
 import base64
 import json
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
 from google import genai
@@ -181,27 +183,58 @@ def run_standard_mode(
 
             # ── Step 2: Build prompt and content parts ───────────
             actual_count = len(images_data)
-            prompt = build_standard_prompt(actual_count, config.whatsapp_categories)
+            prompt = build_standard_prompt(
+                actual_count,
+                config.whatsapp_categories,
+                config.fallback_category,
+                config.global_rules
+            )
             content_parts = _build_content_parts(prompt, images_data)
 
             # ── Step 3: Call the Gemini API ──────────────────────
             try:
-                logger.info("Sending %d image(s) to Gemini API (waiting for response)...", actual_count)
-
-                response = retry_with_backoff(
-                    fn=lambda: client.models.generate_content(
-                        model=config.active_model,
-                        contents=types.Content(
-                            role="user",
-                            parts=content_parts,
-                        ),
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            temperature=0.1,
-                        ),
-                    ),
-                    description=f"Gemini API batch {batch_number}",
+                # Estimate payload size (Text prompt + Base64 images + JSON overhead)
+                # Base64 inflates byte size by ~33%. 
+                base64_size = sum((len(img_bytes) * 4) // 3 for _, img_bytes in images_data)
+                text_size = len(prompt.encode("utf-8"))
+                # Add rough JSON structure overhead (approx 1KB)
+                payload_mb = (base64_size + text_size + 1024) / (1024 * 1024)
+                
+                logger.info(
+                    "Sending %d image(s) to Gemini API (Payload: ~%.2f MB)...", 
+                    actual_count, payload_mb
                 )
+
+                def _call_api():
+                    # This single synchronous call contains all interleaved images and text for the batch.
+                    return retry_with_backoff(
+                        fn=lambda: client.models.generate_content(
+                            model=config.active_model,
+                            contents=types.Content(
+                                role="user",
+                                parts=content_parts,
+                            ),
+                            config=types.GenerateContentConfig(
+                                response_mime_type="application/json",
+                                temperature=0.1,
+                            ),
+                        ),
+                        description=f"Gemini API batch {batch_number}",
+                    )
+
+                # We use a ThreadPoolExecutor with 1 worker to execute the synchronous API call in the background.
+                # This prevents the main thread from freezing and allows us to draw a live tqdm wait spinner
+                # while we wait 5-10 seconds for Google's servers to process the single bulk request.
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_call_api)
+                    
+                    # Show an indeterminate spinner in terminal
+                    with tqdm(desc=f"API Wait", unit="s", leave=False) as wait_pbar:
+                        while not future.done():
+                            time.sleep(1)
+                            wait_pbar.update(1)
+                            
+                    response = future.result()
 
                 logger.info("API response received for Batch %s", progress_str)
 

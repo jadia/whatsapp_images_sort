@@ -44,12 +44,21 @@ The application is strictly driven by a `config.json` file.
     "symbol": "₹",
     "usd_exchange_rate": 83.50
   },
+  "fallback_category": "Uncategorized_Review",
+  "global_rules": [
+    "Choose exactly ONE category.",
+    "Classify by the main purpose of the image.",
+    "If the image is ambiguous or low-confidence, use Uncategorized_Review."
+  ],
   "whatsapp_categories": [
-    "Documents & IDs",
-    "Financial & Receipts",
-    "People & Social",
-    "Memes & Junk",
-    "Scenery & Objects"
+    {
+      "name": "Documents_Important",
+      "description": "Document-like or proof-like images"
+    },
+    {
+      "name": "People_Portraits",
+      "description": "Real personal photos of people"
+    }
   ]
 }
 ```
@@ -96,7 +105,7 @@ All tables include audit columns (`inserted_on`, `updated_on`) with `updated_on`
 
 - **Clubbing Logic:** Pull up to `standard_club_size` (e.g., 10) `Pending` images from the DB.
 - **Payload Generation:** Interleave text (`Image_1:`, `Image_2:`) with base64 image data in the Gemini `parts` array.
-- **Dynamic Prompting:** The text prompt must dynamically state the exact number of images in the batch (to handle the final batch which might have fewer than 10 images). Enforces `Uncategorized_Review` as fallback category.
+- **Dynamic Prompting:** The text prompt must dynamically state the exact number of images in the batch (to handle the final batch which might have fewer than 10 images). Enforces the configured `fallback_category` as the fallback classification.
 - **Processing:** Call the API. Parse the JSON. Move the files. Update the DB to `Completed`.
 - **Mismatch Edge Case:** If the AI returns 9 JSON objects for 10 images, move the 9 successful ones. Revert the missing 1 image in the SQLite DB back to `Pending` so it is picked up in the next run.
 - **Error Handling:** All API calls wrapped in `try/except`. Errors logged to audit log file and `error.log`.
@@ -127,7 +136,7 @@ This mode requires the script to operate in a "Submit, Exit, and Resume" lifecyc
 
 ## 6. Uncategorized & Fallbacks
 
-- The prompt to the AI must strictly enforce that if an image does not fit the `whatsapp_categories`, it must return `"Uncategorized_Review"`. These files are moved to `output_dir/Uncategorized_Review/`.
+- The prompt to the AI must strictly enforce that if an image does not fit the `whatsapp_categories`, it must return the `fallback_category` (e.g. `"Uncategorized_Review"`). These files are then moved to `output_dir/Uncategorized_Review/`.
 - All API calls are wrapped in `try/except` blocks. API errors logged to audit log file and appended to `error.log`.
 
 ---

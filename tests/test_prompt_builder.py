@@ -15,6 +15,10 @@ from src.prompt_builder import (
     build_standard_parts,
     build_standard_prompt,
 )
+from src.config_manager import CategoryDef
+
+def mock_cats(names: list[str]) -> list[CategoryDef]:
+    return [CategoryDef(name=n, description=f"Desc of {n}") for n in names]
 
 
 class TestBuildStandardPrompt:
@@ -22,38 +26,38 @@ class TestBuildStandardPrompt:
 
     def test_prompt_contains_image_count(self):
         """Prompt should dynamically state the number of images."""
-        prompt = build_standard_prompt(7, ["Cat A", "Cat B"])
+        prompt = build_standard_prompt(7, mock_cats(["Cat A", "Cat B"]), "Uncategorized_Review", ["Rule 1"])
         assert "exactly 7 image" in prompt
         assert "Image_1 through Image_7" in prompt
 
     def test_prompt_lists_all_categories(self):
         """All categories should appear in the prompt."""
         categories = ["Documents & IDs", "People & Social", "Memes & Junk"]
-        prompt = build_standard_prompt(3, categories)
+        prompt = build_standard_prompt(3, mock_cats(categories), "Uncategorized_Review", ["Rule 1"])
 
         for cat in categories:
             assert cat in prompt
 
     def test_prompt_enforces_uncategorized_review(self):
         """Prompt should mention Uncategorized_Review as fallback."""
-        prompt = build_standard_prompt(1, ["Test"])
+        prompt = build_standard_prompt(1, mock_cats(["Test"]), "Uncategorized_Review", ["Rule 1"])
         assert "Uncategorized_Review" in prompt
 
     def test_prompt_demands_json_output(self):
         """Prompt should ask for JSON array output."""
-        prompt = build_standard_prompt(2, ["Cat"])
+        prompt = build_standard_prompt(2, mock_cats(["Cat"]), "Uncategorized_Review", ["Rule 1"])
         assert "JSON" in prompt
         assert '"image"' in prompt
         assert '"category"' in prompt
 
     def test_prompt_handles_single_image(self):
         """Prompt should work correctly for 1 image."""
-        prompt = build_standard_prompt(1, ["Cat"])
+        prompt = build_standard_prompt(1, mock_cats(["Cat"]), "Uncategorized_Review", ["Rule 1"])
         assert "exactly 1 image" in prompt
 
     def test_prompt_handles_large_batch(self):
         """Prompt should work for large batches."""
-        prompt = build_standard_prompt(50, ["A", "B", "C"])
+        prompt = build_standard_prompt(50, mock_cats(["A", "B", "C"]), "Uncategorized_Review", ["Rule 1"])
         assert "exactly 50 image" in prompt
         assert "Image_1 through Image_50" in prompt
 
@@ -108,7 +112,9 @@ class TestBuildBatchRequest:
         req = build_batch_request(
             image_uri="files/abc123",
             image_label="Image_1",
-            categories=["Cat A", "Cat B"],
+            categories=mock_cats(["Cat A", "Cat B"]),
+            fallback_category="Fallback",
+            global_rules=["Rule 1"],
             model="gemini-3-flash-lite",
         )
 
@@ -123,7 +129,9 @@ class TestBuildBatchRequest:
         req = build_batch_request(
             image_uri="files/abc123",
             image_label="Image_1",
-            categories=["Cat"],
+            categories=mock_cats(["Cat"]),
+            fallback_category="Uncategorized_Review",
+            global_rules=["Rule 2"],
             model="gemini-3-flash-lite",
         )
 
@@ -135,7 +143,9 @@ class TestBuildBatchRequest:
         req = build_batch_request(
             image_uri="files/abc",
             image_label="Image_1",
-            categories=categories,
+            categories=mock_cats(categories),
+            fallback_category="Uncategorized_Review",
+            global_rules=["Test rule"],
             model="model",
         )
 
@@ -151,7 +161,9 @@ class TestBuildBatchRequest:
         req = build_batch_request(
             image_uri="files/uploaded_123",
             image_label="Image_1",
-            categories=["Cat"],
+            categories=mock_cats(["Cat"]),
+            fallback_category="Uncategorized_Review",
+            global_rules=[],
             model="model",
         )
 
@@ -164,7 +176,9 @@ class TestBuildBatchRequest:
         req = build_batch_request(
             image_uri="files/abc",
             image_label="Image_1",
-            categories=["Cat"],
+            categories=mock_cats(["Cat"]),
+            fallback_category="Uncategorized_Review",
+            global_rules=[],
             model="model",
         )
 
@@ -177,7 +191,9 @@ class TestBuildBatchRequest:
         req = build_batch_request(
             image_uri="files/abc",
             image_label="Image_1",
-            categories=["Cat A"],
+            categories=mock_cats(["Cat A"]),
+            fallback_category="Uncategorized",
+            global_rules=["Some rule"],
             model="gemini-3-flash-lite",
         )
 

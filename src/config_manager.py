@@ -43,6 +43,13 @@ class CurrencyConfig:
 
 
 @dataclass(frozen=True)
+class CategoryDef:
+    """Definition of a single category with name and description."""
+    name: str
+    description: str
+
+
+@dataclass(frozen=True)
 class FeaturesConfig:
     """Feature toggle flags."""
     restore_exif_date: bool = True
@@ -73,7 +80,9 @@ class AppConfig:
     features: FeaturesConfig
     pricing: Dict[str, ModelPricing]
     currency: CurrencyConfig
-    whatsapp_categories: List[str]
+    fallback_category: str
+    global_rules: List[str]
+    whatsapp_categories: List[CategoryDef]
     gemini_api_key: str
 
     # ── Convenience helpers ──────────────────────────────────
@@ -142,12 +151,39 @@ def load_config(
             f"got: '{api_mode}'"
         )
 
-    # 3b. whatsapp_categories
-    categories = raw.get("whatsapp_categories", [])
-    if not isinstance(categories, list) or len(categories) == 0:
-        _fail("'whatsapp_categories' must be a non-empty list.")
+    # 3b. fallback_category
+    fallback_category = str(raw.get("fallback_category", "Uncategorized_Review")).strip()
+    if not fallback_category:
+        _fail("'fallback_category' must be a non-empty string.")
 
-    # 3c. pricing
+    # 3c. global_rules
+    global_rules_raw = raw.get("global_rules", [])
+    if not isinstance(global_rules_raw, list):
+        _fail("'global_rules' must be a list of strings if provided.")
+    
+    global_rules = [str(r).strip() for r in global_rules_raw if str(r).strip()]
+
+    # 3d. whatsapp_categories
+    categories_raw = raw.get("whatsapp_categories", [])
+    if not isinstance(categories_raw, list) or len(categories_raw) == 0:
+        _fail("'whatsapp_categories' must be a non-empty list of category objects.")
+
+    categories: List[CategoryDef] = []
+    for idx, item in enumerate(categories_raw):
+        if not isinstance(item, dict):
+            _fail(f"Category at index {idx} must be a dictionary. Got: {type(item)}")
+        
+        name = str(item.get("name", "")).strip()
+        description = str(item.get("description", "")).strip()
+        
+        if not name:
+            _fail(f"Category at index {idx} is missing a valid 'name' field.")
+        if not description:
+            _fail(f"Category at index {idx} ('{name}') is missing a valid 'description' field.")
+            
+        categories.append(CategoryDef(name=name, description=description))
+
+    # 3e. pricing
     pricing_raw = raw.get("pricing", {})
     if not isinstance(pricing_raw, dict) or len(pricing_raw) == 0:
         _fail("'pricing' must be a non-empty dictionary of model pricing.")
@@ -165,7 +201,7 @@ def load_config(
                 f"Expected keys: 'input_per_1m', 'output_per_1m'."
             )
 
-    # 3d. active_model must exist in pricing
+    # 3f. active_model must exist in pricing
     active_model = raw.get("active_model", "")
     if active_model not in pricing:
         _fail(
@@ -173,7 +209,7 @@ def load_config(
             f"the 'pricing' dictionary. Available: {list(pricing.keys())}"
         )
 
-    # 3e. source_dir — must exist and be readable
+    # 3g. source_dir — must exist and be readable
     source_dir = raw.get("source_dir", "")
     if not source_dir:
         _fail("'source_dir' must be specified in config.json.")
@@ -182,7 +218,7 @@ def load_config(
     if not os.access(source_dir, os.R_OK):
         _fail(f"'source_dir' is not readable: {source_dir}")
 
-    # 3f. output_dir — must exist or be creatable, must be writable
+    # 3h. output_dir — must exist or be creatable, must be writable
     output_dir = raw.get("output_dir", "")
     if not output_dir:
         _fail("'output_dir' must be specified in config.json.")
@@ -194,7 +230,7 @@ def load_config(
     if not os.access(output_dir, os.W_OK):
         _fail(f"'output_dir' is not writable: {output_dir}")
 
-    # 3g. GEMINI_API_KEY
+    # 3i. GEMINI_API_KEY
     gemini_api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not gemini_api_key:
         _fail(
@@ -203,13 +239,13 @@ def load_config(
             "Or set it as an environment variable."
         )
 
-    # 3h. features
+    # 3j. features
     features_raw = raw.get("features", {})
     features = FeaturesConfig(
         restore_exif_date=bool(features_raw.get("restore_exif_date", True)),
     )
 
-    # 3i. currency
+    # 3k. currency
     currency_raw = raw.get("currency", {})
     try:
         currency = CurrencyConfig(
@@ -219,12 +255,12 @@ def load_config(
     except (TypeError, ValueError) as exc:
         _fail(f"Invalid 'currency' config: {exc}")
 
-    # 3j. numeric fields
+    # 3l. numeric fields
     batch_chunk_size = int(raw.get("batch_chunk_size", 1000))
     standard_club_size = int(raw.get("standard_club_size", 10))
     upload_threads = int(raw.get("upload_threads", 10))
-    if not (1 <= upload_threads <= 50):
-        _fail(f"'upload_threads' must be between 1 and 50, got: {upload_threads}")
+    if not (1 <= upload_threads <= 150):
+        _fail(f"'upload_threads' must be between 1 and 150, got: {upload_threads}")
 
     # ── Step 4: Build and return the frozen config ───────────
     config = AppConfig(
@@ -238,7 +274,9 @@ def load_config(
         features=features,
         pricing=pricing,
         currency=currency,
-        whatsapp_categories=list(categories),
+        fallback_category=fallback_category,
+        global_rules=global_rules,
+        whatsapp_categories=categories,
         gemini_api_key=gemini_api_key,
     )
 

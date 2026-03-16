@@ -30,10 +30,11 @@ import os
 import sys
 import tempfile
 import threading
+import textwrap
 import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from google import genai
 from google.genai import types
@@ -49,6 +50,7 @@ from src.database import (
 )
 from src.file_mover import move_image
 from src.image_utils import extract_date, resize_image
+from src.prompt_builder import build_batch_request
 from src.retry import retry_with_backoff
 
 logger = logging.getLogger("whatsapp_sorter")
@@ -65,8 +67,8 @@ def run_batch_mode(
     Process images in Batch (asynchronous) mode.
 
     Lifecycle:
-      1. Check for existing Running batch jobs → resume/poll.
-      2. If no running jobs → submit a new batch.
+      1. Check for existing Running batch jobs → resume/poll. If any are STILL running, exit.
+      2. If all running jobs succeeded/failed OR no jobs existed → submit new jobs.
 
     Returns:
         Total number of images successfully processed.
@@ -78,8 +80,35 @@ def run_batch_mode(
     if not dry_run:
         client = genai.Client(api_key=config.gemini_api_key)
 
-    # ── Phase 1 (Submit) ─────────────────────────────────────────
-    # We always attempt to submit any pending images into the batch queue first.
+    # ── Phase 1 (Resume) ─────────────────────────────────────────
+    running_jobs = db.get_running_batch_jobs()
+    total_processed = 0
+
+    if running_jobs:
+        logger.info(
+            "Found %d running/pending batch job(s) from previous runs — polling status first",
+            len(running_jobs),
+        )
+        for job in running_jobs:
+            processed = _resume_batch_job(
+                client=client,
+                config=config,
+                db=db,
+                cost_tracker=cost_tracker,
+                job=job,
+                dry_run=dry_run,
+            )
+            total_processed += processed
+        
+        # If any jobs remain running, exit to wait for them. Don't start new queue iterations.
+        if db.get_running_batch_jobs():
+            logger.info("Some batch jobs are still running. Exiting to wait for completion before submitting new ones.")
+            return total_processed
+        else:
+            logger.info("All previous batch jobs have resolved. Proceeding to pending queue.")
+
+    # ── Phase 2 (Submit) ─────────────────────────────────────────
+    # We attempt to submit any pending images into the batch queue.
     # The `_submit_batch_job` function will pull `config.batch_chunk_size` images at a time.
     while True:
         submitted = _submit_batch_job(
@@ -89,32 +118,14 @@ def run_batch_mode(
             test_mode=test_mode,
             dry_run=dry_run,
         )
-        if not submitted:
+        if not submitted or test_mode:
             break
-
-    # ── Phase 2 (Resume) ─────────────────────────────────────────
-    running_jobs = db.get_running_batch_jobs()
-
-    if running_jobs:
-        logger.info(
-            "Found %d running/pending batch job(s) — returning to polling phase",
-            len(running_jobs),
-        )
-    else:
-        logger.info("No running batch jobs to poll.")
-        return 0
-
-    total_processed = 0
-    for job in running_jobs:
-        processed = _resume_batch_job(
-            client=client,
-            config=config,
-            db=db,
-            cost_tracker=cost_tracker,
-            job=job,
-            dry_run=dry_run,
-        )
-        total_processed += processed
+            
+    # ── Post-Submit ──────────────────────────────────────────────
+    new_jobs = db.get_running_batch_jobs()
+    if new_jobs:
+        logger.info("New batch job(s) submitted successfully. They are currently processing.")
+        logger.info("Run the script again later to check their status and collect results.")
 
     return total_processed
 
@@ -282,40 +293,17 @@ def _submit_batch_job(
         logger.info("Uploaded %d images to File API", len(uploaded_files))
 
         # ── Step 2: Build JSONL input file ───────────────────────
-        category_list = ", ".join(f'"{cat}"' for cat in config.whatsapp_categories)
         jsonl_lines = []
 
         for item in uploaded_files:
-            prompt_text = (
-                f'Classify this image into exactly ONE category from: [{category_list}]. '
-                f'If it does not fit any category, use "Uncategorized_Review". '
-                f'Return ONLY a JSON object: {{"image": "{item["label"]}", "category": "<chosen>"}}'
+            request_obj = build_batch_request(
+                image_uri=item["file_uri"],
+                image_label=item["label"],
+                categories=config.whatsapp_categories,
+                fallback_category=config.fallback_category,
+                global_rules=config.global_rules,
+                model=config.active_model,
             )
-
-            request_obj = {
-                "key": item["label"],
-                "request": {
-                    "model": f"models/{config.active_model}",
-                    "contents": [
-                        {
-                            "role": "user",
-                            "parts": [
-                                {"text": prompt_text},
-                                {
-                                    "file_data": {
-                                        "file_uri": item["file_uri"],
-                                        "mime_type": "image/jpeg",
-                                    }
-                                },
-                            ],
-                        }
-                    ],
-                    "generation_config": {
-                        "response_mime_type": "application/json",
-                        "temperature": 0.1,
-                    },
-                },
-            }
             jsonl_lines.append(json.dumps(request_obj))
 
         # Write JSONL to a temp file
