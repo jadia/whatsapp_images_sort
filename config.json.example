@@ -9,6 +9,10 @@
   "features": {
     "restore_exif_date": true
   },
+  "ignored_extensions": [
+    ".heic",
+    ".heif"
+  ],
   "pricing": {
     "gemini-3.1-flash-lite-preview": {
       "input_per_1m": 0.25,

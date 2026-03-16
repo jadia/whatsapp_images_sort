@@ -60,7 +60,9 @@ graph TB
 
 ## Standard Mode Sequence
 
-Standard mode is synchronous and optimized for immediate results. To minimize API round-trips, it groups images into "clubs" (e.g., 10 images at once) and interleaves the image bytes directly into a single massive multimodal prompt. If the API successfully processes all 10 images, they are moved. If the AI hallucinates and returns fewer results (a mismatch), the missing images are gracefully reverted to `Pending` status in the database to be safely retried in the next batch.
+Standard mode is synchronous and optimized for immediate results. To minimize API round-trips, it groups images into "clubs" (e.g., 250 images at once) and interleaves the image bytes directly into a single massive multimodal prompt. 
+
+During the actual API call, it encapsulates the sync request inside a daemonized `threading.Thread`. This allows the script to draw an indeterminate `tqdm` UI spinner while waiting, and ensures `Ctrl+C` immediately abandons the request. If the AI hallucinates and returns fewer results (a mismatch), the missing images are gracefully reverted to `Pending` status in the database to be safely retried in the next batch.
 
 ```mermaid
 sequenceDiagram
@@ -101,10 +103,10 @@ sequenceDiagram
 
 ## Batch Mode Lifecycle
 
-Batch mode is fully asynchronous and significantly cheaper, designed for bulk processing. It operates in two lifecycle phases to allow the user to close the terminal while Google processes the data in the background.
+Batch mode is fully asynchronous and significantly cheaper, designed for bulk processing. It automatically applies a 50% discount to all cost estimators. It operates in two lifecycle phases to allow the user to close the terminal while Google processes the data in the background.
 
-**Phase 1** pulls chunks of images (up to `batch_chunk_size` at a time) from the pending queue and resizes/uploads them in parallel using `ThreadPoolExecutor`. Each upload is wrapped in `retry_with_backoff()` to handle rate limits. The chunk is packaged into a JSONL manifest and submitted to the Batch API. This loop repeats until the *entire* pending queue has been successfully dispatched as multiple independent jobs.
-**Phase 2** polling begins. The script checks job status. While jobs are running, it displays a live countdown. When successful, it pulls the results, categorizes the files, and executes a parallel cleanup sweep of the File API to prevent exhausting the user's storage quota. If the user presses Ctrl+C at any point, all orphaned uploads are cleaned up from the File API before exiting.
+**Phase 1** is executed *second* (only if no jobs are already running). It pulls chunks of images (up to `batch_chunk_size` at a time) from the pending queue and resizes/uploads them in parallel using a ThreadPoolExecutor. Each upload is wrapped in `retry_with_backoff()` to handle rate limits. The chunk is packaged into a JSONL manifest and submitted to the Batch API. This loop repeats until the *entire* pending queue has been successfully dispatched.
+**Phase 2** is executed *first* on script launch. The script checks database job statuses. While jobs are running, it refuses to submit new batches, displaying a live countdown. When successful, it pulls the results, categorizes the files, and executes a parallel cleanup sweep of the File API to prevent exhausting the user's storage quota. If the user presses Ctrl+C at any point, all orphaned uploads are cleaned up from the File API before exiting.
 
 ```mermaid
 sequenceDiagram

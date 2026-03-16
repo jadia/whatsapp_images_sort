@@ -59,6 +59,7 @@ def batch_env(tmp_path):
         currency=CurrencyConfig(symbol="₹", usd_exchange_rate=83.50),
         fallback_category="Uncategorized_Review",
         global_rules=["Only pick one.", "Be smart."],
+        ignored_extensions=[".heic"],
         whatsapp_categories=[
             CategoryDef(name="People & Social", description="Test desc"),
             CategoryDef(name="Memes & Junk", description="Test desc")

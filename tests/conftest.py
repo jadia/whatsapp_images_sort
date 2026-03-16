@@ -62,6 +62,7 @@ def sample_config(tmp_dirs):
         currency=CurrencyConfig(symbol="₹", usd_exchange_rate=83.50),
         fallback_category="Uncategorized_Review",
         global_rules=["Only pick one.", "Be smart."],
+        ignored_extensions=[".heic"],
         whatsapp_categories=[
             CategoryDef(name="Documents & IDs", description="All kinds of docs"),
             CategoryDef(name="People & Social", description="Photos of people"),

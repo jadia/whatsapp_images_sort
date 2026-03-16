@@ -20,6 +20,7 @@ All API calls are wrapped in try/except with error logging.
 import base64
 import json
 import logging
+import os
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -32,7 +33,7 @@ from tqdm import tqdm
 from src.config_manager import AppConfig
 from src.cost_tracker import CostTracker
 from src.database import Database, STATUS_PENDING
-from src.file_mover import move_image
+from src.file_mover import move_image, move_to_unprocessable
 from src.image_utils import extract_date, resize_image
 from src.prompt_builder import build_standard_prompt
 from src.retry import retry_with_backoff
@@ -155,6 +156,27 @@ def run_standard_mode(
             for i, row in enumerate(pending_batch, start=1):
                 label = f"Image_{i}"
                 file_path = row["file_path"]
+                original_filename = os.path.basename(file_path)
+
+                # ── Step 1a: Pre-flight checks ───────────────────────
+                if original_filename.startswith("._"):
+                    logger.warning("Skipping AppleDouble metadata file %s: %s", label, file_path)
+                    try:
+                        move_to_unprocessable(file_path, config.output_dir)
+                    except OSError as e:
+                        logger.debug("Failed to quarantine AppleDouble file: %s", e)
+                    db.mark_failed(row["id"])
+                    continue
+                    
+                _, ext = os.path.splitext(original_filename)
+                if ext.lower() in config.ignored_extensions:
+                    logger.warning("Skipping explicitly ignored extension %s: %s", label, file_path)
+                    try:
+                        move_to_unprocessable(file_path, config.output_dir)
+                    except OSError as e:
+                        logger.debug("Failed to quarantine ignored file: %s", e)
+                    db.mark_failed(row["id"])
+                    continue
 
                 try:
                     jpeg_bytes = resize_image(file_path)
@@ -169,12 +191,16 @@ def run_standard_mode(
                     logger.debug("Prepared %s: %s", label, file_path)
 
                 except (FileNotFoundError, PermissionError) as exc:
-                    logger.warning("File missing or unreadable %s: %s", file_path, exc)
+                    logger.warning("File missing or unreadable %s: %s", label, exc)
                     db.mark_missing(row["id"])
 
                 except Exception as exc:
-                    logger.error("Failed to prepare image %s: %s", file_path, exc)
+                    logger.error("Failed to prepare image %s (%s): %s", label, file_path, exc)
                     db.mark_failed(row["id"])
+                    try:
+                        move_to_unprocessable(file_path, config.output_dir)
+                    except OSError as e:
+                        logger.debug("Failed to cascade quarantine file: %s", e)
 
             if not images_data:
                 logger.warning("No images could be prepared in this batch — skipping")
