@@ -2,6 +2,8 @@
 
 AI-powered image categorization utility that uses the **Google Gemini API** to sort large volumes of images (e.g., WhatsApp media) into organized folders.
 
+**Supported Python Version:** 3.12+
+
 ## Features
 
 - 📁 **Dual-mode processing** — Standard (instant synchronous processing) and Batch (async queue, **50% offline discount**). Designed explicitly for the Google Gemini API.
@@ -86,7 +88,7 @@ python main.py
 | `active_model` | string | Gemini model name (must be in `pricing`) |
 | `batch_chunk_size` | int | Images per batch job (batch mode) |
 | `standard_club_size` | int | Images per API call (standard mode) |
-| `upload_threads` | int | Parallel upload and cleanup threads (1–100, default: 40) |
+| `upload_threads` | int | Parallel upload and cleanup threads (1–150, default: 100) |
 | `source_dir` | string | Directory to scan for images |
 | `output_dir` | string | Root directory for sorted output |
 | `features.restore_exif_date` | bool | Inject date into EXIF metadata |

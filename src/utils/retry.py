@@ -44,6 +44,13 @@ try:
 except ImportError:
     pass
 
+# Also handle the new google.genai SDK exceptions
+try:
+    from google.genai.errors import ClientError
+    RETRYABLE_EXCEPTIONS = RETRYABLE_EXCEPTIONS + (ClientError,)
+except ImportError:
+    pass
+
 
 def retry_with_backoff(
     fn: Callable[[], T],
@@ -77,7 +84,21 @@ def retry_with_backoff(
     for attempt in range(max_retries + 1):
         try:
             return fn()
-        except RETRYABLE_EXCEPTIONS as exc:
+        except Exception as exc:
+            # Check if this exception is in our retryable list
+            is_retryable = isinstance(exc, RETRYABLE_EXCEPTIONS)
+            
+            # Special handling for google.genai ClientError status codes
+            if not is_retryable:
+                # If it has a status code, check if it's 429 or 5xx
+                status_code = getattr(exc, "code", None)
+                if status_code in (429, 500, 502, 503, 504):
+                    is_retryable = True
+            
+            if not is_retryable:
+                # Not a retryable error — propagate immediately
+                raise
+
             last_exception = exc
 
             if attempt == max_retries:
@@ -88,12 +109,18 @@ def retry_with_backoff(
                 raise
 
             # Exponential back-off with jitter
-            delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+            # Add more aggressive back-off for 429/503
+            actual_base = base_delay
+            status_code = getattr(exc, "code", None)
+            if status_code in (429, 503):
+                actual_base *= 2  # Start with longer delay for rate limits
+                
+            delay = min(actual_base * (2 ** attempt) + random.uniform(0, 1), max_delay)
             logger.warning(
                 "%s failed (attempt %d/%d): %s — retrying in %.1fs",
                 description, attempt + 1, max_retries + 1, exc, delay,
             )
             time.sleep(delay)
 
-    # Should never reach here, but satisfy type checker
+    # Should never reach here
     raise last_exception  # type: ignore

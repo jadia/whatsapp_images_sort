@@ -57,3 +57,29 @@ The script parses this, directly looks up `id=39040` in the database, and moves 
 1. **Auto-Pruning:** Upon startup, `main.py` scans the disk. If it finds files in the SQLite database that no longer exist on your drive (because you deleted or moved them manually), it runs a highly efficient `DELETE` query to purge the DB queue and keep it lean.
 2. **Missing Files Recovery:** If a file becomes unreadable during processing (e.g., corrupted disk sector), the script marks it as `Missing` instead of infinitely retrying.
 3. **Graceful Thread Shutdown:** In Standard mode, synchronous API calls run on a background daemon thread. If you hit `Ctrl+C`, the main thread instantly kills the daemon and exits cleanly. The database state remains uncorrupted, and the interrupted images remain safely marked as `Pending`.
+
+---
+
+## 4. Retry with Exponential Back-off
+
+To handle the inherent volatility of cloud APIs (rate limits, transient network drops, and server-side pressure), the application implements a robust, thread-safe **Exponential Back-off with Jitter** strategy via `src/utils/retry.py`.
+
+### A. Retry Strategy
+When an API call (Upload or Inference) fails, the script does not immediately give up. Instead, it follows a deterministic delay pattern:
+1. **Base Delay:** 1.0 second (configurable).
+2. **Exponential Growth:** The delay doubles with each subsequent attempt (e.g., 1s, 2s, 4s...).
+3. **Random Jitter:** A small random float (0.0–1.0s) is added to each delay. This prevents "Thundering Herd" scenarios where 100 concurrent threads all retry at the exact same millisecond, overwhelming the API again.
+4. **Max Delay Cap:** 60.0 seconds.
+
+### B. Intelligent Error Classification
+The retry mechanism is not "blind." It only retries errors that are considered **Transient**:
+- **HTTP 429 (Resource Exhausted):** The system automatically backs off more aggressively when rate limits are hit.
+- **HTTP 5xx (Server Errors):** 500, 502, 503, and 504 errors are automatically retried up to 3 times.
+- **Network Issues:** Timeouts, DNS resolution failures, and connection resets.
+
+**Immediate Failures (No Retry):**
+- **HTTP 400 (Bad Request):** e.g., Invalid API key, malformed prompt, or "Upload already terminated."
+- **HTTP 403 (Permission Denied):** e.g., Blocked API key or expired credentials.
+- **Pillow Errors:** Unidentified image formats or "Decompression Bomb" safety triggers.
+
+If a file fails all 3 retry attempts, it is moved to the `Unprocessable_Quarantine/` directory and marked as `Failed` in the SQLite database to prevent blocking the rest of the queue.

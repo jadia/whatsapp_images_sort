@@ -28,6 +28,13 @@ from typing import Optional
 
 from PIL import Image
 
+# ── Image Decoding Compatibility ─────────────────────────────
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:
+    pass
+
 logger = logging.getLogger("whatsapp_sorter")
 
 # ── Constants ────────────────────────────────────────────────
