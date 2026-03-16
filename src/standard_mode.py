@@ -21,6 +21,7 @@ import base64
 import json
 import logging
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
@@ -222,19 +223,31 @@ def run_standard_mode(
                         description=f"Gemini API batch {batch_number}",
                     )
 
-                # We use a ThreadPoolExecutor with 1 worker to execute the synchronous API call in the background.
-                # This prevents the main thread from freezing and allows us to draw a live tqdm wait spinner
-                # while we wait 5-10 seconds for Google's servers to process the single bulk request.
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_call_api)
-                    
-                    # Show an indeterminate spinner in terminal
-                    with tqdm(desc=f"API Wait", unit="s", leave=False) as wait_pbar:
-                        while not future.done():
-                            time.sleep(1)
-                            wait_pbar.update(1)
-                            
-                    response = future.result()
+                # We use a daemon Thread to execute the synchronous API call in the background.
+                # This prevents the main thread from freezing and allows us to draw a live tqdm wait spinner.
+                # Daemon threads abandon gracefully if the user triggers a KeyboardInterrupt.
+                api_result = []
+                api_exc = []
+
+                def _thread_target():
+                    try:
+                        api_result.append(_call_api())
+                    except Exception as e:
+                        api_exc.append(e)
+
+                t = threading.Thread(target=_thread_target, daemon=True)
+                t.start()
+                
+                # Show an indeterminate spinner in terminal
+                with tqdm(desc=f"API Wait", unit="s", leave=False) as wait_pbar:
+                    while t.is_alive():
+                        time.sleep(1)
+                        wait_pbar.update(1)
+                
+                if api_exc:
+                    raise api_exc[0]
+                        
+                response = api_result[0]
 
                 logger.info("API response received for Batch %s", progress_str)
 
