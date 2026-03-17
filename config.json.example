@@ -18,6 +18,10 @@
     "gemini-3-flash-preview": {
       "input_per_1m": 0.50,
       "output_per_1m": 3.00
+    },
+    "gemini-2.5-flash-lite": {
+      "input_per_1m": 0.10,
+      "output_per_1m": 0.40
     }
   },
   "currency": {
@@ -26,34 +30,33 @@
   },
   "fallback_category": "Uncategorized_Review",
   "global_rules": [
-    "Choose exactly ONE category.",
-    "Classify by the main purpose of the image.",
-    "If the image is ambiguous or low-confidence, use Uncategorized_Review."
+    "Classify the main subject into exactly ONE category.",
+    "If ambiguous or unsure, return Uncategorized_Review."
   ],
   "whatsapp_categories": [
     {
       "name": "People_Portraits",
-      "description": "Real personal photos where one or two people are the clear main subject, including selfies and close portraits. Not screenshots, documents, memes, or text-dominant graphics."
+      "description": "1-2 people, selfies, close-up portraits."
     },
     {
       "name": "People_Group_Photos",
-      "description": "Real personal photos of families, friends, couples, gatherings, celebrations, and candid group moments. Not invitations, greeting cards, or forwarded festival graphics."
+      "description": "3+ people, families, crowds, events, gatherings."
     },
     {
       "name": "Documents_Important",
-      "description": "Images mainly kept for information or proof, including IDs, receipts, invoices, bills, prescriptions, certificates, forms, notes, and payment proofs. Use this even when a document was photographed by camera."
+      "description": "IDs, receipts, invoices, bills, prescriptions, forms, printed text."
     },
     {
       "name": "Personal_NonPeople_Photos",
-      "description": "Real camera photos of pets, food, travel, places, objects, products, rooms, vehicles, or nature where people are not the main focus. Not screenshots or document-style images."
+      "description": "Pets, food, travel, objects, nature, vehicles, architecture."
     },
     {
       "name": "Screenshots_Chat_UI",
-      "description": "Screenshots, chat captures, app screens, web pages, QR codes, social media captures, and other display-captured images. If it looks captured from a screen, use this category."
+      "description": "Screenshots, app UI, web pages, chat logs, QR codes."
     },
     {
       "name": "Memes_Forwards_Graphics",
-      "description": "Memes, jokes, quote cards, news graphics, posters, greeting cards, stickers, collages, political or religious forwards, and similar shareable internet content. Use for low-value forwarded graphics rather than personal memories."
+      "description": "Memes, quote cards, greeting cards, jokes, digital posters, forwards."
     }
   ]
 }
