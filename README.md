@@ -152,18 +152,26 @@ Choosing the right mode in `config.json` depends entirely on your queue size and
 - **Phase 2 (Poll):** Instead of keeping a synchronous connection open, the application steps back and automatically polls Google until their servers have processed your entire backlog.
 - Automatic cleanup of File API uploads when completed or cancelled.
 
-## Realistic Cost Analysis (gemini-3.1-flash-lite-preview)
+## Realistic Cost Analysis & Model Comparison
 
-Using Gemini's Batch API makes classifying thousands of images impressively cheap. 
+Using Gemini's Batch API makes classifying thousands of images impressively cheap. However, **your choice of model dramatically affects the price**.
 
-The costs shown below are projections modeled using **real token usage averages** pulled from a live run of 16,638 images (averaging **1,522 input tokens** and **21 output tokens** per 384x384 image footprint):
+Below is a direct comparison from a real-world batch run of **4,745 images** resized to 384x384, processed with the exact same configuration and prompts:
 
-| Queue Size | Projected Tokens | Standard Cost | Batch Cost (50% Off) |
-|------------|------------------|---------------|----------------------|
-| **1,000 images** | ~1.5 Million | ~$0.41 USD | **~$0.21 USD (₹17.20 INR)** |
-| **5,000 images** | ~7.7 Million | ~$2.06 USD | **~$1.03 USD (₹86.00 INR)** |
-| **16,638 images** | ~25.7 Million | ~$6.86 USD | **~$3.43 USD (₹286.41 INR)** |
-| **20,000 images** | ~30.9 Million | ~$8.24 USD | **~$4.12 USD (₹344.02 INR)** |
+| Model | Avg Input Tokens | Avg Output Tokens | Total Tokens | Cost (Batch 50% Off) |
+|-------|------------------|-------------------|--------------|----------------------|
+| **gemini-2.5-flash-lite** | ~697 / image | ~22.3 / image | ~3.4 Million | **~$0.19 USD (₹15.58 INR)** |
+| **gemini-3.1-flash-lite-preview** | ~1,480 / image | ~21.5 / image | ~7.3 Million | **~$0.98 USD (₹81.66 INR)** |
+
+### Why is Gemini 3.1 so much more expensive?
+The cost difference comes down to how the models calculate vision tokens:
+- **Gemini 2.5** dynamically scales with image size. It charges just **258 tokens** for a heavily compressed 384x384 image. Added to a ~439 token text prompt, it totals ~697 tokens per image.
+- **Gemini 3.1** introduces a new vision architecture that enforces a fixed **1,120 token floor** per image (treating all inputs as `media_resolution_high`), completely ignoring the fact that the image was downscaled to 384x384. Adding the same text prompt bumps the total to nearly ~1,500 tokens per image. (See the Gemini 3 Media Resolution Docs for more details).   
+
+
+[Reference: Gemini 3 Media Resolution Docs](https://ai.google.dev/gemini-api/docs/models/gemini-3-pro-preview#media-resolution)
+
+**Recommendation:** For simple visual classification tasks like WhatsApp sorting, **`gemini-2.5-flash-lite` is significantly more cost-effective** while delivering comparable accuracy.
 
 *Note: The SQLite database self-calibrates to your personal usage. If you run `--dry-run`, the cost printed uses your actual historical data.*
 
@@ -200,10 +208,6 @@ pytest tests/ -v --tb=short
 - [Architecture](docs/architecture.md) — System design with Mermaid diagrams
 - [Troubleshooting](docs/troubleshooting.md) — Common errors and recovery steps
 - [Specification](prompt/specification.md) — Original project specification
-
-## License
-
-MIT
 
 ## 🧠 How it Works under the Hood
 

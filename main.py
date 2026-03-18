@@ -60,8 +60,8 @@ def _print_banner() -> None:
     print(
         "\n"
         "╔══════════════════════════════════════════════════════╗\n"
-        "║              WhatsApp Image Sorter                  ║\n"
-        "║         AI-powered image categorization             ║\n"
+        "║              WhatsApp Image Sorter                   ║\n"
+        "║         AI-powered image categorization              ║\n"
         "╚══════════════════════════════════════════════════════╝\n"
     )
 
