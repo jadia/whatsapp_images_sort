@@ -406,11 +406,11 @@ def _submit_batch_job(
         # Store the file API names for later cleanup
         _save_batch_metadata(job_id, uploaded_files)
 
-        logger.info("╔══════════════════════════════════════════════════╗")
-        logger.info("║  Batch job submitted successfully!               ║")
+        logger.info("╔════════════════════════════════════════════════════╗")
+        logger.info("║  Batch job submitted successfully!                 ║")
         logger.info("║  Job: %-42s ║", api_job_name)
         logger.info("║  Images: %-39d ║", len(uploaded_files))
-        logger.info("╚══════════════════════════════════════════════════╝")
+        logger.info("╚════════════════════════════════════════════════════╝")
 
         return True  # Submitted successfully
 
@@ -572,9 +572,8 @@ def _handle_batch_success(
                     output_content = output_content.decode("utf-8")
 
                 # Parse each line of the JSONL output
-                for line in output_content.strip().split("\n"):
-                    if not line.strip():
-                        continue
+                lines = [line for line in output_content.strip().split("\n") if line.strip()]
+                for line in tqdm(lines, desc="Processing results", unit="img", dynamic_ncols=True):
                     try:
                         result = json.loads(line)
                         key = result.get("key", "")

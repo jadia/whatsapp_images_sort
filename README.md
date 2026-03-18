@@ -209,10 +209,6 @@ pytest tests/ -v --tb=short
 - [Troubleshooting](docs/troubleshooting.md) — Common errors and recovery steps
 - [Specification](prompt/specification.md) — Original project specification
 
-## License
-
-MIT
-
 ## 🧠 How it Works under the Hood
 
 WhatsApp Image Sorter is designed to be **bulletproof against interruptions**. You can `Ctrl+C` the script, lose your internet connection, or hit an API rate limit, and the tool will seamlessly resume exactly where it left off.
