@@ -409,7 +409,7 @@ def _submit_batch_job(
         logger.info("╔════════════════════════════════════════════════════╗")
         logger.info("║  Batch job submitted successfully!                 ║")
         logger.info("║  Job: %-42s ║", api_job_name)
-        logger.info("║  Images: %-39d    ║", len(uploaded_files))
+        logger.info("║  Images: %-39d   ║", len(uploaded_files))
         logger.info("╚════════════════════════════════════════════════════╝")
 
         return True  # Submitted successfully

@@ -4,6 +4,8 @@ AI-powered image categorization utility that uses the **Google Gemini API** to s
 
 **Supported Python Version:** 3.12+
 
+[![asciicast](https://asciinema.org/a/ajo9khV3vAwmNOVS.svg)](https://asciinema.org/a/ajo9khV3vAwmNOVS)
+
 ## Features
 
 - 📁 **Dual-mode processing** — Standard (instant synchronous processing) and Batch (async queue, **50% offline discount**). Designed explicitly for the Google Gemini API.

@@ -7,6 +7,7 @@ test_data3/
 test_data_sorted/
 batch_metadata/
 config.json
+scratchpad.txt
 
 # Python
 __pycache__/
